@@ -11,7 +11,6 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "better-sqlite3": "^11.8.1",
     "chalk": "^5.6.2",
     "cli-truncate": "^5.2.0",
     "execa": "^9.5.2",

@@ -9,7 +9,7 @@ const envSchema = z.object({
   OPENAI_EMBEDDING_API_KEY: z.string().optional(),
   OPENAI_EMBEDDING_BASE_URL: z.string().optional(),
   OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-large"),
-  DB_PATH: z.string().default(".agent/agent.db"),
+  MEMORY_DIR: z.string().default(".agent/memory"),
   MAX_ATTEMPTS: z.coerce.number().int().positive().default(4),
   CONTEXT_CHAR_BUDGET: z.coerce.number().int().positive().default(20_000),
   RETRIEVE_TOP_K: z.coerce.number().int().positive().default(12),

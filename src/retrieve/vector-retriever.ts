@@ -1,5 +1,4 @@
 import { cosine } from "../utils/math.js";
-import { EmbeddingCache } from "../storage/embedding-cache.js";
 import type { FileChunk, FsIndexer } from "../repo/fs-indexer.js";
 import type { RetrieveChunk } from "./hybrid-retriever.js";
 
@@ -9,8 +8,7 @@ export class VectorRetriever {
 
   constructor(
     private indexer: FsIndexer,
-    private embedder: (texts: string[]) => Promise<number[][]>,
-    private embeddingCache: EmbeddingCache
+    private embedder: (texts: string[]) => Promise<number[][]>
   ) {}
 
   async retrieve(task: string, topK: number): Promise<RetrieveChunk[]> {
@@ -20,17 +18,18 @@ export class VectorRetriever {
     }
     if (this.chunkCache.length === 0) return [];
 
-    // Get embeddings with batching and db caching
+    // Get embeddings (no caching since embedding is disabled)
     if (!this.chunkEmbCache) {
-      const chunkContents = this.chunkCache.map((c) => c.content);
-      this.chunkEmbCache = await this.embeddingCache.getOrCompute(
-        chunkContents,
-        this.embedder
+      this.chunkEmbCache = await this.embedder(
+        this.chunkCache.map((c) => c.content)
       );
     }
 
-    const queryEmbs = await this.embeddingCache.getOrCompute([task], this.embedder);
+    const queryEmbs = await this.embedder([task]);
     const queryEmb = queryEmbs[0];
+    
+    // If embedding returns empty, return empty results
+    if (!queryEmb || !this.chunkEmbCache.length) return [];
 
     const chunkEmbCache = this.chunkEmbCache;
     const scored = this.chunkCache
