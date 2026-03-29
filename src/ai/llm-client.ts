@@ -11,6 +11,12 @@ export interface PatchProposal {
 }
 
 export interface LlmClient {
+  analyze(input: {
+    task: string;
+    contextChunks: PatchContextChunk[];
+    constraints: string[];
+  }): Promise<string>;
+
   proposePatch(input: {
     task: string;
     contextChunks: PatchContextChunk[];

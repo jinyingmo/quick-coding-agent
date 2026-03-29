@@ -4,7 +4,10 @@ import path from "node:path";
 
 const envSchema = z.object({
   OPENAI_API_KEY: z.string().min(1),
+  OPENAI_BASE_URL: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-5.2"),
+  OPENAI_EMBEDDING_API_KEY: z.string().optional(),
+  OPENAI_EMBEDDING_BASE_URL: z.string().optional(),
   OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-large"),
   DB_PATH: z.string().default(".agent/agent.db"),
   MAX_ATTEMPTS: z.coerce.number().int().positive().default(4),
@@ -30,6 +33,12 @@ function parseDotenv(content: string): Record<string, string> {
       (value.startsWith("'") && value.endsWith("'"))
     ) {
       value = value.slice(1, -1);
+    } else {
+      // Very naive inline comment strip
+      const hashIdx = value.indexOf(" #");
+      if (hashIdx >= 0) {
+        value = value.slice(0, hashIdx).trim();
+      }
     }
     out[key] = value;
   }

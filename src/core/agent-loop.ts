@@ -15,23 +15,43 @@ import { createSqlite } from "../storage/sqlite.js";
 import { CommandRunner } from "../tools/command-runner.js";
 import { GitTools } from "../tools/git-tools.js";
 import { SearchTools } from "../tools/search-tools.js";
+import { logger } from "../utils/logger.js";
 import { Verifier } from "../verify/verifier.js";
 import { Orchestrator } from "./orchestrator.js";
 
 export async function buildContainer(cwd = process.cwd()): Promise<Orchestrator> {
+  logger.info({ cwd }, "building agent container");
   const env = loadEnv();
   const db = createSqlite(env.DB_PATH);
-  const llm = new OpenAiClient(env.OPENAI_API_KEY, env.OPENAI_MODEL, env.OPENAI_EMBEDDING_MODEL);
+  const llm = new OpenAiClient(
+    env.OPENAI_API_KEY,
+    env.OPENAI_MODEL,
+    env.OPENAI_EMBEDDING_MODEL,
+    env.OPENAI_BASE_URL,
+    env.OPENAI_EMBEDDING_API_KEY,
+    env.OPENAI_EMBEDDING_BASE_URL
+  );
+
   const embeddingCache = new EmbeddingCache(db);
-  const memory: MemoryStore = new SqliteMemoryStore(db, (texts) => llm.embed(texts), embeddingCache);
+  const memory: MemoryStore = new SqliteMemoryStore(
+    db,
+    // (texts) => llm.embed(texts),
+    // embeddingCache
+  );
 
   const commandRunner = new CommandRunner(cwd);
   const searchTools = new SearchTools(cwd, commandRunner);
   const fsIndexer = new FsIndexer(cwd);
   const graphRetriever = new GraphRetriever(new DependencyGraphBuilder(), fsIndexer);
+  logger.info("warming up dependency graph");
   await graphRetriever.warmup();
+  logger.info("dependency graph ready");
 
-  const vectorRetriever = new VectorRetriever(fsIndexer, llm, embeddingCache);
+  const vectorRetriever = new VectorRetriever(
+    fsIndexer,
+    (texts) => Promise.resolve([]), // (texts) => llm.embed(texts),
+    embeddingCache
+  );
   const retriever = new DefaultHybridRetriever(
     new KeywordRetriever(searchTools),
     vectorRetriever,

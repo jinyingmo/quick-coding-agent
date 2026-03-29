@@ -6,10 +6,17 @@ async function main(): Promise<void> {
   if (!task) {
     throw new Error('Usage: pnpm dev -- "fix xxx"');
   }
+  logger.info({ task }, "task received");
   const agent = await buildContainer(process.cwd());
+  logger.info("agent container ready");
   const result = await agent.runTask(task, Number(process.env.MAX_ATTEMPTS ?? 4));
   logger.info({ result }, "task finished");
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (result.ok && result.summary) {
+    process.stdout.write(`\n${result.summary}\n`);
+  }
+  if (!result.ok) {
+    process.stdout.write(`\n任务失败: ${result.reason}\n`);
+  }
 }
 
 main().catch((error) => {

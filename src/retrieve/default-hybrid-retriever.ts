@@ -17,12 +17,12 @@ export class DefaultHybridRetriever implements HybridRetriever {
     topK: number;
     changedFiles?: string[];
   }): Promise<RetrieveChunk[]> {
-    const [kw, vec] = await Promise.all([
+    const [kw] = await Promise.all([
       this.keyword.retrieve(input.task, Math.max(8, input.topK)),
-      this.vector.retrieve(input.task, Math.max(8, input.topK)),
+      // this.vector.retrieve(input.task, Math.max(8, input.topK)),
     ]);
     const graph = this.graph.retrieve(input.changedFiles, Math.max(3, Math.floor(input.topK / 2)));
 
-    return this.reranker.rerank([...kw, ...vec, ...graph], input.topK);
+    return this.reranker.rerank([...kw, ...graph], input.topK);
   }
 }
