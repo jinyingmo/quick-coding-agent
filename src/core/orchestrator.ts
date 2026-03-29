@@ -11,6 +11,8 @@ import type { VectorRetriever } from "../retrieve/vector-retriever.js";
 import { GitTools } from "../tools/git-tools.js";
 import { clipContextByCharBudget } from "../utils/context-budget.js";
 import { logger } from "../utils/logger.js";
+import type { AgentPhase } from "../ui/agent-progress.js";
+import { AgentProgressUI } from "../ui/agent-progress.js";
 import { Verifier } from "../verify/verifier.js";
 import type { TaskResult } from "./types.js";
 
@@ -46,6 +48,7 @@ function extractPathCandidates(task: string): string[] {
 export class Orchestrator {
   private shortMemory: ShortTermMemory;
   private episodicMemory: EpisodicMemory;
+  private progressUI: AgentProgressUI;
 
   constructor(
     private llm: LlmClient,
@@ -59,9 +62,11 @@ export class Orchestrator {
       retrieveTopK: number;
       contextCharBudget: number;
     },
+    progressEnabled = true,
   ) {
     this.shortMemory = new ShortTermMemory(memory);
     this.episodicMemory = new EpisodicMemory(memory);
+    this.progressUI = new AgentProgressUI(progressEnabled);
   }
 
   private async loadReferencedContext(
@@ -74,13 +79,25 @@ export class Orchestrator {
       const absolute = path.resolve(candidate);
       try {
         const stat = await fs.stat(absolute);
-        if (!stat.isFile()) continue;
-        const content = await fs.readFile(absolute, "utf-8");
-        chunks.push({
-          id: absolute,
-          file: absolute,
-          content: content.slice(0, 20_000),
-        });
+        if (stat.isDirectory()) {
+          // Handle directory: read all files recursively
+          const dirFiles = await this.listFilesRecursively(absolute);
+          for (const filePath of dirFiles) {
+            const content = await fs.readFile(filePath, "utf-8");
+            chunks.push({
+              id: filePath,
+              file: filePath,
+              content: content.slice(0, 20_000),
+            });
+          }
+        } else if (stat.isFile()) {
+          const content = await fs.readFile(absolute, "utf-8");
+          chunks.push({
+            id: absolute,
+            file: absolute,
+            content: content.slice(0, 20_000),
+          });
+        }
       } catch {
         continue;
       }
@@ -89,9 +106,51 @@ export class Orchestrator {
     return chunks;
   }
 
+  private async listFilesRecursively(dirPath: string): Promise<string[]> {
+    const files: string[] = [];
+    const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        // Skip hidden directories and common non-source directories
+        if (
+          !entry.name.startsWith(".") &&
+          !["node_modules", "dist", "build"].includes(entry.name)
+        ) {
+          files.push(...(await this.listFilesRecursively(fullPath)));
+        }
+      } else if (entry.isFile() && !entry.name.startsWith(".")) {
+        // Only include source files
+        const ext = path.extname(entry.name).toLowerCase();
+        const sourceExtensions = [
+          ".ts",
+          ".tsx",
+          ".js",
+          ".jsx",
+          ".json",
+          ".md",
+          ".sql",
+          ".yaml",
+          ".yml",
+        ];
+        if (sourceExtensions.includes(ext)) {
+          files.push(fullPath);
+        }
+      }
+    }
+
+    return files;
+  }
+
   async runTask(task: string, maxAttempts = 4): Promise<TaskResult> {
     try {
+      // Start progress UI
+      this.progressUI.start(task, maxAttempts);
+
       logger.info({ task }, "runTask started");
+      this.progressUI.setPhase("init", "Initializing agent...");
+
       await this.memory.cleanupExpired();
       await this.memory.compact("working");
       await this.memory.compact("episodic");
@@ -100,11 +159,14 @@ export class Orchestrator {
 
       if (isAnalysisTask(task)) {
         logger.info("analysis task detected");
+        this.progressUI.setPhase("analysis", "Loading analysis context...");
+
         const referencedContext = await this.loadReferencedContext(task);
         logger.info(
           { referencedFiles: referencedContext.length },
           "analysis context loaded",
         );
+        this.progressUI.setPhase("llm-call", "Analyzing task with LLM...");
 
         const analysis = await this.llm.analyze({
           task,
@@ -117,6 +179,7 @@ export class Orchestrator {
         });
 
         logger.info({ analysis }, "analysis completed");
+        this.progressUI.stop();
 
         return {
           ok: true,
@@ -127,7 +190,8 @@ export class Orchestrator {
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         logger.info({ attempt, task }, "agent attempt started");
-        logger.info({ attempt }, "retrieval started");
+        this.progressUI.setAttempt(attempt);
+        this.progressUI.setPhase("retrieval", "Retrieving relevant context...");
 
         const [retrieved, relevantMemory] = await Promise.all([
           this.retriever.retrieve({
@@ -144,6 +208,10 @@ export class Orchestrator {
             memoryHits: relevantMemory.length,
           },
           "retrieval finished",
+        );
+        this.progressUI.showRetrievalProgress(
+          retrieved.length,
+          relevantMemory.length,
         );
 
         const rawContextChunks = [
@@ -164,6 +232,8 @@ export class Orchestrator {
         );
 
         logger.info({ attempt }, "requesting patch proposal");
+        this.progressUI.setPhase("llm-call", "Generating patch proposal...");
+
         const proposal = await this.llm.proposePatch({
           task,
           contextChunks,
@@ -188,6 +258,7 @@ export class Orchestrator {
             { attempt },
             "no patch proposed, terminating task as finished",
           );
+          this.progressUI.stop();
           return {
             ok: true,
             attempt,
@@ -196,9 +267,13 @@ export class Orchestrator {
           };
         }
 
+        this.progressUI.setPhase("patch", "Applying patch...");
         const applied = await this.patchEngine.apply(proposal.patch);
         if (!applied.ok) {
           logger.warn({ attempt, error: applied.error }, "patch apply failed");
+          this.progressUI.warn(
+            `Patch apply failed: ${applied.error ?? "unknown"}`,
+          );
           await this.shortMemory.addNote(
             `attempt=${attempt} patch apply failed: ${applied.error ?? "unknown"}`,
             ["apply_failed"],
@@ -210,6 +285,9 @@ export class Orchestrator {
           { attempt, changedFiles: applied.changedFiles },
           "patch applied",
         );
+        this.progressUI.showPatchProgress(applied.changedFiles.join(", "));
+
+        this.progressUI.setPhase("verification", "Running verification...");
         const verify = await this.verifier.run({
           targetTests: proposal.testsToRun,
         });
@@ -223,6 +301,7 @@ export class Orchestrator {
           "verification finished",
         );
         if (verify.ok) {
+          this.progressUI.setPhase("memory", "Saving to memory...");
           await this.episodicMemory.addCase({
             task,
             reasoning: proposal.reasoning,
@@ -240,6 +319,7 @@ export class Orchestrator {
             ttlSec: 3600,
             commitHash: commitHash ?? undefined,
           });
+          this.progressUI.stop();
           return {
             ok: true,
             attempt,
@@ -248,8 +328,13 @@ export class Orchestrator {
           };
         }
 
+        this.progressUI.warn(
+          `Verification failed at ${verify.stage}, rolling back...`,
+        );
         await this.patchEngine.rollback(applied.rollbackId);
         logger.info({ attempt }, "rollback completed");
+
+        this.progressUI.setPhase("llm-call", "Analyzing failure...");
         const reflection = await this.llm.summarizeFailure({
           task,
           verifyLog: verify.logs,
@@ -270,6 +355,7 @@ export class Orchestrator {
         changedFiles = applied.changedFiles;
       }
 
+      this.progressUI.error("Max attempts reached");
       return { ok: false, reason: "max_attempts_reached" };
     } finally {
       // Clean up caches

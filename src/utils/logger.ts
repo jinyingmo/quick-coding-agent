@@ -27,10 +27,22 @@ function hydrateEnvFromDotenv(): void {
 
 hydrateEnvFromDotenv();
 
-const level = process.env.LOG_LEVEL ?? "info";
+const isDebug = process.env.DEBUG === "true";
+// Only show logs when DEBUG=true, otherwise silent
+const level = isDebug ? (process.env.LOG_LEVEL ?? "debug") : "silent";
 
 export const logger = pino({
   level,
   base: undefined,
   timestamp: pino.stdTimeFunctions.isoTime,
+  transport: isDebug
+    ? {
+        target: "pino-pretty",
+        options: {
+          colorize: true,
+          translateTime: "SYS:standard",
+          ignore: "pid,hostname",
+        },
+      }
+    : undefined,
 });

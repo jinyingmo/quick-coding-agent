@@ -66,5 +66,5 @@ export async function buildContainer(cwd = process.cwd()): Promise<Orchestrator>
   return new Orchestrator(llm, retriever, memory, patchEngine, verifier, gitTools, vectorRetriever, {
     retrieveTopK: env.RETRIEVE_TOP_K,
     contextCharBudget: env.CONTEXT_CHAR_BUDGET,
-  });
+  }, true); // Enable progress UI
 }
