@@ -2,29 +2,15 @@
   "name": "quick-coding-agent",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "dev": "tsx src/app.ts",
-    "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "chalk": "^5.6.2",
-    "cli-truncate": "^5.2.0",
-    "execa": "^9.5.2",
-    "log-update": "^7.2.0",
-    "openai": "^5.12.2",
-    "ora": "^9.3.0",
-    "pino": "^9.7.0",
-    "zod": "^3.25.76"
+    "build": "pnpm -r build",
+    "clean": "pnpm -r clean",
+    "agent:demo": "pnpm --filter @quick-coding-agent/agent-tool-call demo",
+    "agent:repl": "pnpm --filter @quick-coding-agent/agent-tool-call repl",
+    "memory:demo": "pnpm --filter @quick-coding-agent/memory-system demo",
+    "memory:demo:local": "pnpm --filter @quick-coding-agent/memory-system demo:local"
   },
   "devDependencies": {
-    "@types/node": "^22.14.1",
-    "eslint": "^9.23.0",
-    "tsx": "^4.20.3",
-    "typescript": "^5.8.3",
-    "vitest": "^2.1.8"
+    "typescript": "^5.9.3"
   }
 }

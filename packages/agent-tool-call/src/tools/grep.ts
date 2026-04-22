@@ -1,0 +1,247 @@
+/**
+ * `grep` — search file contents with a regular expression.
+ *
+ * Mirrors the behaviour of `GrepTool` (which uses ripgrep) from the parent
+ * project, but implemented entirely in Node.js so there is no dependency on
+ * the `rg` binary.  Trade-offs relative to ripgrep:
+ *
+ *  - Slower on very large repos (no mmap, no parallelism).
+ *  - Does not honour .gitignore.
+ *  - Hard limit of 200 matching lines prevents context overflow.
+ *
+ * The same "always skip" set used by GlobTool is applied here.
+ *
+ * Output modes:
+ *  - "content"  (default) — "file:lineNum: text" for each matching line
+ *  - "files"    — just the list of files that contain at least one match
+ */
+
+import { readFile, readdir, stat } from 'fs/promises'
+import { join } from 'path'
+import { z } from 'zod'
+import type { Tool } from '../types.js'
+
+const ALWAYS_SKIP = new Set([
+  'node_modules',
+  '.git',
+  '.svn',
+  'dist',
+  'build',
+  '.next',
+  'coverage',
+  '__pycache__',
+  '.venv',
+  'venv',
+])
+
+type Match = { file: string; line: number; text: string }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Scanning helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Search a single file for `pattern`.  Appends up to `limit` matches.
+ * Returns true if the file produced at least one match (for files-only mode).
+ */
+async function grepFile(
+  filePath: string,
+  pattern: RegExp,
+  matches: Match[],
+  limit: number,
+): Promise<boolean> {
+  if (matches.length >= limit) return false
+
+  let text: string
+  try {
+    text = await readFile(filePath, 'utf-8')
+  } catch {
+    return false // binary or unreadable — skip silently
+  }
+
+  // Quick check before splitting lines
+  if (!pattern.test(text)) return false
+  // Reset lastIndex after the global flag test
+  pattern.lastIndex = 0
+
+  let found = false
+  const lines = text.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    if (matches.length >= limit) break
+    pattern.lastIndex = 0
+    if (pattern.test(lines[i]!)) {
+      matches.push({ file: filePath, line: i + 1, text: lines[i]! })
+      found = true
+    }
+  }
+  return found
+}
+
+/**
+ * Recursively search a directory, collecting matches.
+ * `globExt` is an optional extension filter (e.g. "ts" from "*.ts").
+ */
+async function grepDir(
+  dir: string,
+  pattern: RegExp,
+  globExt: string | undefined,
+  matches: Match[],
+  limit: number,
+): Promise<void> {
+  if (matches.length >= limit) return
+
+  let names: string[]
+  try {
+    names = await readdir(dir)
+  } catch {
+    return
+  }
+  names.sort()
+
+  await Promise.all(
+    names.map(async name => {
+      if (matches.length >= limit) return
+      if (ALWAYS_SKIP.has(name)) return
+
+      const fullPath = join(dir, name)
+      let s
+      try {
+        s = await stat(fullPath)
+      } catch {
+        return
+      }
+
+      if (s.isDirectory()) {
+        await grepDir(fullPath, pattern, globExt, matches, limit)
+      } else if (s.isFile()) {
+        // Extension filter (from glob parameter)
+        if (globExt) {
+          const ext = name.includes('.') ? name.split('.').pop() : ''
+          if (ext !== globExt) return
+        }
+        await grepFile(fullPath, pattern, matches, limit)
+      }
+    }),
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Tool definition
+// ────────────────────────────────────────────────────────────────────────────
+
+const inputSchema = z.object({
+  pattern: z
+    .string()
+    .describe('Regular expression to search for. JavaScript regex syntax.'),
+  path: z
+    .string()
+    .optional()
+    .describe(
+      'Absolute path to a file or directory to search. Defaults to the agent working directory.',
+    ),
+  glob: z
+    .string()
+    .optional()
+    .describe(
+      'File-extension filter, e.g. "*.ts" or "*.py". ' +
+        'Only files with that extension are searched. Leave empty to search all text files.',
+    ),
+  case_insensitive: z
+    .boolean()
+    .optional()
+    .describe('If true, the regex is compiled case-insensitively (default: false).'),
+  output_mode: z
+    .enum(['content', 'files'])
+    .optional()
+    .describe(
+      '"content" (default) shows file:line: text for each match. ' +
+        '"files" returns only the list of matching files.',
+    ),
+})
+
+type Output = {
+  matches: Match[]
+  filesMatched: string[]
+  count: number
+  truncated: boolean
+}
+
+export const grepTool: Tool<typeof inputSchema, Output> = {
+  name: 'grep',
+  description:
+    'Search file contents with a regular expression. ' +
+    'Returns up to 200 matching lines with file path and line number. ' +
+    'Use glob to filter by file type (e.g. "*.ts"). ' +
+    'Use output_mode="files" to get only the list of matching file paths. ' +
+    'Automatically excludes node_modules, .git, dist, build, coverage. ' +
+    'ALWAYS use this tool for text searches — never invoke grep or rg via bash.',
+  inputSchema,
+  isReadOnly: () => true,
+  async call(input, ctx) {
+    const LIMIT = 200
+    const searchPath = input.path ?? ctx.cwd
+    const outputMode = input.output_mode ?? 'content'
+
+    // Build regex
+    const flags = 'g' + (input.case_insensitive ? 'i' : '')
+    let pattern: RegExp
+    try {
+      pattern = new RegExp(input.pattern, flags)
+    } catch (err) {
+      return {
+        data: { matches: [], filesMatched: [], count: 0, truncated: false },
+        display: `Invalid regex: ${(err as Error).message}`,
+        isError: true,
+      }
+    }
+
+    // Extract extension from glob filter (e.g. "*.ts" → "ts")
+    const globExt = input.glob
+      ? input.glob.replace(/^.*\*\./, '').replace(/[^a-zA-Z0-9].*$/, '') || undefined
+      : undefined
+
+    const matches: Match[] = []
+
+    let s
+    try {
+      s = await stat(searchPath)
+    } catch {
+      return {
+        data: { matches: [], filesMatched: [], count: 0, truncated: false },
+        display: `Path not found: ${searchPath}`,
+        isError: true,
+      }
+    }
+
+    if (s.isFile()) {
+      await grepFile(searchPath, pattern, matches, LIMIT)
+    } else {
+      await grepDir(searchPath, pattern, globExt, matches, LIMIT)
+    }
+
+    const truncated = matches.length >= LIMIT
+    const filesMatched = [...new Set(matches.map(m => m.file))]
+
+    let display: string
+    if (matches.length === 0) {
+      display = 'No matches found'
+    } else if (outputMode === 'files') {
+      display =
+        filesMatched.join('\n') +
+        (truncated ? '\n\n(Results truncated at 200 matches — use a more specific pattern.)' : '')
+    } else {
+      display =
+        matches.map(m => `${m.file}:${m.line}: ${m.text}`).join('\n') +
+        (truncated ? '\n\n(Results truncated at 200 matches — use a more specific pattern.)' : '')
+    }
+
+    ctx.log(
+      `[grep] pattern=${input.pattern} → ${matches.length} matches in ${filesMatched.length} files`,
+      'debug',
+    )
+    return {
+      data: { matches, filesMatched, count: matches.length, truncated },
+      display,
+    }
+  },
+}
