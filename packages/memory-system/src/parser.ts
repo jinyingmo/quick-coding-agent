@@ -63,8 +63,11 @@ export function parseFrontmatter(markdown: string): ParsedMarkdown {
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       frontmatter = parsed as FrontmatterData
     }
-  } catch {
-    // parsing failed — return empty frontmatter
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Failed to parse frontmatter: ${error.message}`)
+    }
+    throw new Error('Failed to parse frontmatter: unknown error')
   }
 
   return { frontmatter, content }

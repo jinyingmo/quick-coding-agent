@@ -6,10 +6,12 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsup",
     "start": "npm run build && node dist/cli.js",
     "demo": "npm run build && node dist/cli.js --demo",
     "demo:local": "npm run build && node dist/cli.js --demo --no-llm",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
   "keywords": ["memory", "claude", "persistence", "kimi", "llm"],
@@ -19,6 +21,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "typescript": "^5.3.0"
+    "tsup": "^8.5.1",
+    "typescript": "^5.3.0",
+    "vitest": "^2.0.0"
   }
 }

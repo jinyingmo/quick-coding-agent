@@ -4,10 +4,12 @@
   "description": "Simplified Claude-Code-style agent with tool calling, integrated with the memory-system demo (Kimi/Moonshot LLM)",
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsup",
     "start": "npm run build && node dist/cli.js",
     "demo": "npm run build && node dist/cli.js --scripted",
     "repl": "npm run build && node dist/cli.js --repl",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
   "keywords": [
@@ -26,6 +28,8 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.39",
-    "typescript": "^5.9.3"
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^2.0.0"
   }
 }

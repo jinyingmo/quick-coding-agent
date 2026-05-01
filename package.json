@@ -5,12 +5,16 @@
   "scripts": {
     "build": "pnpm -r build",
     "clean": "pnpm -r clean",
+    "test": "pnpm -r test",
     "agent:demo": "pnpm --filter @quick-coding-agent/agent-tool-call demo",
     "agent:repl": "pnpm --filter @quick-coding-agent/agent-tool-call repl",
     "memory:demo": "pnpm --filter @quick-coding-agent/memory-system demo",
     "memory:demo:local": "pnpm --filter @quick-coding-agent/memory-system demo:local"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "@vitest/coverage-v8": "^2.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^2.0.0"
   }
 }
