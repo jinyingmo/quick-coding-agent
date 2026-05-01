@@ -109,7 +109,17 @@ export type ToolUseContext = {
 export type Tool<Input extends z.ZodType = z.ZodType, Output = unknown> = {
   readonly name: string
   readonly description: string
+  /** Capability source (built-in local tool vs MCP-exposed tool). */
+  readonly source?: 'local' | 'mcp'
+  /** Optional metadata for observability / diagnostics. */
+  readonly metadata?: {
+    server?: string
+    originalName?: string
+    title?: string
+  }
   readonly inputSchema: Input
+  /** Optional pre-baked JSON schema (used by MCP-adapted tools). */
+  readonly jsonSchema?: Record<string, unknown>
   isReadOnly(input: z.infer<Input>): boolean
   call(input: z.infer<Input>, context: ToolUseContext): Promise<ToolResult<Output>>
 }

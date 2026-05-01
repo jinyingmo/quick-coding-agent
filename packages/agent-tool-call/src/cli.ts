@@ -49,7 +49,8 @@ async function main() {
   console.log('├──────────────────────────────────────────────────────────┤')
   console.log(`│  memoryDir : ${memoryDir.padEnd(43)}│`)
   console.log(`│  model     : ${(process.env.KIMI_MODEL ?? 'moonshot-v1-8k').padEnd(43)}│`)
-  console.log('│  commands  : /quit  /history  /reload  /memory          │')
+  console.log('│  commands  : /quit /history /reload /memory /tools      │')
+  console.log('│             /skills                                      │')
   console.log('╰──────────────────────────────────────────────────────────╯\n')
 
   const agent = new Agent({
@@ -82,6 +83,22 @@ async function main() {
     }
     if (input === '/memory') {
       console.log(`  Memory directory: ${memoryDir}`)
+      continue
+    }
+    if (input === '/tools') {
+      const tools = agent.toolNames()
+      console.log(`  Loaded tools (${tools.length}):`)
+      for (const t of tools) console.log(`    - ${t}`)
+      continue
+    }
+    if (input === '/skills') {
+      const skills = agent.activeSkillIds()
+      if (skills.length === 0) {
+        console.log('  Active skills: (none)')
+      } else {
+        console.log(`  Active skills (${skills.length}):`)
+        for (const s of skills) console.log(`    - ${s}`)
+      }
       continue
     }
 

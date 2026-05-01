@@ -204,7 +204,7 @@ export async function callLLM(opts: LLMCallOptions): Promise<AssistantMessage> {
     function: {
       name: t.name,
       description: t.description,
-      parameters: zodToJsonSchema(t.inputSchema),
+      parameters: t.jsonSchema ?? zodToJsonSchema(t.inputSchema),
     },
   }))
 

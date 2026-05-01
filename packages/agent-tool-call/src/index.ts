@@ -43,3 +43,19 @@ export { buildSystemPrompt } from './systemPrompt.js'
 
 // Permissions
 export { allowAllPermission, restrictToMemoryDirPermission } from './permissions.js'
+
+// Capability providers
+export { createLocalToolsProvider } from './capabilities/localProvider.js'
+export { resolveToolsFromProviders } from './capabilities/resolveTools.js'
+export type { CapabilityProvider, CapabilityProviderContext } from './capabilities/types.js'
+
+// MCP
+export { createMCPProvider } from './mcp/provider.js'
+export { loadMCPSettingsFromEnv } from './mcp/config.js'
+export type { MCPSettings, MCPServerConfig } from './mcp/config.js'
+
+// Skills
+export { loadSkills } from './skills/loader.js'
+export { extractSkillMentions, selectSkills, buildToolAllowlistFromSkills } from './skills/resolver.js'
+export { buildSkillsPromptSection } from './skills/prompt.js'
+export type { SkillDoc, SkillSelection } from './skills/types.js'

@@ -22,12 +22,15 @@ export type BuildSystemPromptParams = {
   agentName?: string
   /** Current working directory — shown in the prompt so the model doesn't hallucinate paths. */
   cwd?: string
+  /** Optional extra sections appended before memory instructions (e.g. skills). */
+  extraSections?: string[]
 }
 
 export async function buildSystemPrompt(params: BuildSystemPromptParams): Promise<string> {
   const memorySection = await buildMemoryPrompt(params.memoryDir)
   const agentName = params.agentName ?? 'Codey'
   const cwd = params.cwd ?? process.cwd()
+  const extraSections = (params.extraSections ?? []).filter(s => s.trim().length > 0)
 
   // Build the formatted tool list for the "available tools" section
   const toolList = params.tools.map(t => `- \`${t.name}\` — ${t.description}`).join('\n')
@@ -142,6 +145,10 @@ export async function buildSystemPrompt(params: BuildSystemPromptParams): Promis
     '- If a bash command is potentially destructive, describe what it will do and ask for confirmation before running it.',
     '',
     '---',
+    '',
+    ...(extraSections.length > 0
+      ? ['## Extra runtime instructions', '', ...extraSections, '', '---', '']
+      : []),
     '',
     // ── 7. Memory ─────────────────────────────────────────────────────────────
     memorySection,

@@ -1,79 +1,69 @@
-# Agent Tool-Call Demo
+# Agent Tool-Call 演示
 
-A runnable, **Claude-Code-shaped agent** built around three ideas the parent
-project leans on heaviest:
+这是一个可运行的、**形态接近 Claude Code 的 agent**，围绕主项目最核心的三个思路构建：
 
-1. **Query loop** — LLM emits `tool_use` blocks, the runtime executes tools in
-   parallel, results come back as `tool_result`, repeat until the model stops.
-2. **Forked sub-agents with their own permission policy** — background work
-   (memory extraction in this demo) runs in an isolated context that inherits
-   the parent's prompt cache but is sandboxed via `CanUseToolFn`.
-3. **Stop hooks** — when the main loop finishes a turn, fire-and-forget side
-   effects (extracting memories, autosave, telemetry) run *after* the user has
-   already seen the answer.
+1. **查询循环（Query loop）**：LLM 产出 `tool_use` 块，运行时并行执行工具，结果以 `tool_result` 回传，循环往复直到模型停止。
+2. **带独立权限策略的 Fork 子 Agent**：后台任务（本演示中的记忆抽取）在隔离上下文中运行，继承父级提示缓存，但通过 `CanUseToolFn` 进行沙箱限制。
+3. **Stop hooks**：主循环结束后，以 fire-and-forget 方式执行副作用任务（抽取记忆、自动保存、遥测等），不阻塞用户拿到回答。
 
-It plugs into the sibling [`memory-system`](../memory-system/README.md) demo
-and re-uses its `findRelevantMemories`, `buildMemoryPrompt`, `saveMemory` etc.
-so the persistent-memory loop is **end-to-end real**, not faked.
+它与同级的 [`memory-system`](../memory-system/README.md) 演示联动，复用 `findRelevantMemories`、`buildMemoryPrompt`、`saveMemory` 等能力，因此持久化记忆链路是**端到端真实可运行**的，而非伪造。
 
-> **One-liner:** "What does Claude Code's `query` loop look like, distilled into
-> ~1.2 kloc of TypeScript that you can step through in an afternoon?"
+> **一句话概括：**“Claude Code 的 `query` 循环是什么样？这个仓库把它提炼为约 1.2k 行 TypeScript，你可以在一个下午读透。”
 
 ---
 
-## What it demonstrates
+## 演示内容
 
-| Concept (parent project) | Where it lives here |
+| 概念（对应主项目） | 在本项目中的位置 |
 |---|---|
-| `Tool` interface (`name` / `description` / `inputSchema` / `isReadOnly` / `call`) | `src/types.ts`, `src/tools/*.ts` |
-| Permission gating (`CanUseToolFn`, allow / deny / updatedInput) | `src/permissions.ts` |
-| Query loop (`tool_use` ↔ `tool_result` until `end_turn`) | `src/query.ts` |
-| Forked agents inheriting the parent context | `src/forkedAgent.ts` |
-| Stop hooks (background work *after* the model is done) | `src/agent.ts`, `src/extractMemories.ts` |
-| Mutual exclusion between main writes and background extractor | `src/extractMemories.ts` (`hasMemoryWritesSince`) |
-| Throttling / single-flighting / trailing-run behaviour | `src/extractMemories.ts` |
-| OpenAI-compatible tool-calling (Moonshot/Kimi) | `src/llm.ts` |
-| Memory-aware system prompt | `src/systemPrompt.ts` (calls `buildMemoryPrompt`) |
-| Offline, deterministic walkthrough (no LLM key needed) | `src/scripted.ts` |
+| `Tool` 接口（`name` / `description` / `inputSchema` / `isReadOnly` / `call`） | `src/types.ts`, `src/tools/*.ts` |
+| 权限闸门（`CanUseToolFn`, allow / deny / updatedInput） | `src/permissions.ts` |
+| 查询循环（`tool_use` ↔ `tool_result` 直到 `end_turn`） | `src/query.ts` |
+| 继承父上下文的 Fork Agent | `src/forkedAgent.ts` |
+| Stop hooks（模型完成后触发后台任务） | `src/agent.ts`, `src/extractMemories.ts` |
+| 主写入与后台抽取互斥 | `src/extractMemories.ts` (`hasMemoryWritesSince`) |
+| 节流 / 单飞 / 尾随重跑机制 | `src/extractMemories.ts` |
+| OpenAI 兼容的工具调用（Moonshot/Kimi） | `src/llm.ts` |
+| 感知记忆的系统提示词 | `src/systemPrompt.ts`（调用 `buildMemoryPrompt`） |
+| 能力提供器（本地 + MCP） | `src/capabilities/*`, `src/mcp/*` |
+| Skills 加载 / 解析 / 提示注入 | `src/skills/*`, `src/agent.ts` |
+| 离线、确定性演示（无需 LLM Key） | `src/scripted.ts` |
 
 ---
 
-## Quick start
+## 快速开始
 
 ```bash
 cd packages/agent-tool-call
 npm install
 
-# Offline scripted demo — no API key, three end-to-end scenarios
+# 离线脚本演示 —— 不需要 API key，包含 3 个端到端场景
 npm run demo
 
-# Interactive REPL — needs KIMI_API_KEY in .env
+# 交互式 REPL —— 需要在 .env 中配置 KIMI_API_KEY
 cp .env.example .env
-# edit .env and add your Moonshot key
+# 编辑 .env，填入你的 Moonshot key
 npm run repl
 ```
 
-The demo defaults to the sibling memory directory at
-`../memory-system/memory`, so any memory the agent saves shows up immediately
-in the memory-system demo too. Override with `MEMORY_DIR=...` or pass
-`--memory-dir <path>` (REPL flag).
+默认会使用同级目录的记忆路径 `../memory-system/memory`，因此 agent 保存的记忆会立即出现在 memory-system 演示中。你可以通过 `MEMORY_DIR=...` 或 `--memory-dir <path>`（REPL 参数）覆盖。
 
-### REPL commands
+### REPL 命令
 
-| Command | Effect |
+| 命令 | 作用 |
 |---|---|
-| `/quit` or `/exit` | Drain background work, then exit |
-| `/history` | Print message-count of in-process conversation |
-| `/reload` | Rebuild the system prompt from the latest `MEMORY.md` |
-| `/memory` | Print the active memory directory |
+| `/quit` 或 `/exit` | 等待后台任务收尾后退出 |
+| `/history` | 打印当前会话内消息数 |
+| `/reload` | 用最新 `MEMORY.md` 重建系统提示词 |
+| `/memory` | 打印当前记忆目录 |
+| `/tools` | 打印当前加载的工具名（local + MCP） |
+| `/skills` | 打印当前激活的 skill id |
 
 ---
 
-## Scripted demo (the interesting bit)
+## 脚本演示（重点）
 
-`npm run demo` runs three offline scenarios using a tiny `CannedModel`
-(no API needed). It exercises the *real* query loop, the *real* permission
-checker, and the *real* extractor entry-point — only the LLM is canned.
+`npm run demo` 会使用一个很小的 `CannedModel` 跑 3 个离线场景（无需 API）。它执行的是真实查询循环、真实权限检查、真实记忆抽取入口；只有 LLM 被替换为预置响应。
 
 ```text
 ▶ Scenario 1: main agent searches memory, answers, then extractor fires
@@ -93,10 +83,9 @@ checker, and the *real* extractor entry-point — only the LLM is canned.
 
 ---
 
-## Why does this look like Claude Code?
+## 为什么它看起来像 Claude Code？
 
-The shape of `runQueryLoop` is identical to `src/query.ts` in the parent
-project, just collapsed:
+`runQueryLoop` 的骨架与主项目 `src/query.ts` 基本一致，只是做了精简：
 
 ```ts
 while (turn++ < maxTurns) {
@@ -116,7 +105,7 @@ if (!isForkedAgent) for (const hook of stopHooks) await hook(...)
 return { messages: history, finalMessage: history.at(-1)! }
 ```
 
-Permission checks happen *before* `tool.call`:
+权限校验发生在 `tool.call` **之前**：
 
 ```ts
 const decision = await canUseTool(tool, parsedInput, ctx)
@@ -126,9 +115,7 @@ if (decision.behavior === 'deny') {
 return tool.call(decision.updatedInput, ctx)
 ```
 
-The extractor is *exactly* a sub-agent invocation — same loop, same tools,
-different prompt and a stricter `canUseTool` (writes restricted to
-`memoryDir`):
+抽取器本质上就是一次子 Agent 调用：循环与工具一致，但 prompt 和 `canUseTool` 更严格（写入限制在 `memoryDir`）：
 
 ```ts
 runForkedAgent({
@@ -143,9 +130,9 @@ runForkedAgent({
 
 ---
 
-## Project layout
+## 项目结构
 
-```
+```text
 agent-tool-call/
 ├── src/
 │   ├── types.ts           # Message / ContentBlock / Tool / ToolUseContext
@@ -168,26 +155,55 @@ agent-tool-call/
 ├── tsconfig.json
 └── .env.example
 ```
-This package depends on `@quick-coding-agent/memory-system` via workspace linking.
+
+本包通过 workspace linking 依赖 `@quick-coding-agent/memory-system`。
 
 ---
 
-## Configuration
+## 配置
 
-Everything is driven by env vars (see `.env.example`):
+所有配置都通过环境变量控制（见 `.env.example`）：
 
-| Variable | Default | Notes |
+| 变量 | 默认值 | 说明 |
 |---|---|---|
-| `KIMI_API_KEY` | (none) | Required for `npm run repl` |
-| `KIMI_MODEL` | `moonshot-v1-8k` | Tool-calling capable |
-| `KIMI_BASE_URL` | `https://api.moonshot.cn/v1` | OpenAI-compatible |
-| `KIMI_TIMEOUT_MS` | `30000` | Per LLM call |
-| `MEMORY_DIR` | `../memory-system/memory` | Persistent memory root |
-| `DEBUG` | (unset) | `1` to dump LLM payloads + tool denials |
+| `KIMI_API_KEY` | （无） | `npm run repl` 必填 |
+| `KIMI_MODEL` | `moonshot-v1-8k` | 需支持 tool-calling |
+| `KIMI_BASE_URL` | `https://api.moonshot.cn/v1` | OpenAI 兼容接口 |
+| `KIMI_TIMEOUT_MS` | `30000` | 单次 LLM 调用超时 |
+| `MEMORY_DIR` | `../memory-system/memory` | 持久化记忆目录 |
+| `DEBUG` | （未设置） | 设为 `1` 打印 LLM payload 与工具拒绝日志 |
+| `MCP_SERVERS` | （未设置） | MCP server 配置 JSON 数组（优先于文件） |
+| `MCP_SERVERS_FILE` | （未设置） | 包含 MCP server 数组的 JSON 文件路径 |
+| `MCP_ENABLED` | auto | 强制开启/关闭 MCP（`true/false`） |
+| `SKILL_ROOTS` | （未设置） | Skill 根目录（按系统路径分隔符分隔） |
+| `SKILLS` | （未设置） | 默认激活的 skill id，逗号分隔 |
+| `SKILL_STRICT_ALLOWLIST` | `false` | 为 `true` 时，激活 skill 可收敛工具集 |
+
+### MCP server 配置格式
+
+`MCP_SERVERS` / `MCP_SERVERS_FILE` 必须是 JSON 数组：
+
+```json
+[
+  {
+    "name": "filesystem",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/abs/project/path"],
+    "startupTimeoutMs": 15000,
+    "toolTimeoutMs": 30000
+  }
+]
+```
+
+MCP 工具会暴露为：
+
+`mcp__<serverName>__<toolName>`
+
+例如：`mcp__filesystem__read_file`。
 
 ---
 
-## Programmatic API (if you want to embed it)
+## 编程式 API（用于嵌入）
 
 ```typescript
 import { Agent } from './src/agent.js'
@@ -204,7 +220,7 @@ console.log(reply)
 await agent.drain(10_000)   // wait for background extraction before exit
 ```
 
-To run a one-off forked agent yourself:
+如果你想手动执行一次 forked agent：
 
 ```typescript
 import { runForkedAgent } from './src/forkedAgent.js'
@@ -225,27 +241,22 @@ await runForkedAgent({
 
 ---
 
-## Limitations (intentional)
+## 限制（刻意保留）
 
-This is a teaching demo, not a replacement for the real agent runtime.
-Things that are deliberately omitted:
+这是一个教学演示，不是生产运行时的完整替代。以下能力被有意省略：
 
-- **Streaming responses** — we wait for the full LLM completion per turn.
-- **Cost / token tracking** — only basic per-turn logging.
-- **MCP servers, sub-skills, plug-ins, hooks file** — would dwarf the demo.
-- **Compaction / context-window management** — short conversations only.
-- **AutoDream consolidation** — see `src/services/autoDream/` in the parent
-  project; it's the same forked-agent pattern with a different prompt.
-- **Persistent on-disk message log** — history lives in process memory only.
+- **流式响应**：当前按 turn 等待完整 LLM 返回。
+- **成本/Token 追踪**：只有基础日志。
+- **MCP servers、sub-skills、plug-ins、hooks file 的完整体系**：完整接入会让 demo 体量失控。
+- **上下文压缩 / 长窗口管理**：只面向短会话。
+- **AutoDream 汇总**：见主项目 `src/services/autoDream/`，模式相同但 prompt 不同。
+- **落盘消息日志**：会话历史当前仅驻留进程内存。
 
 ---
 
-## See also
+## 相关文档
 
-- [`packages/memory-system`](../memory-system/README.md) — the persistent-memory
-  half of the architecture, used as a library here.
-- `src/query.ts` (parent project) — the production query loop this demo
-  mirrors.
-- `src/services/extractMemories/` (parent project) — the production
-  extractor this demo's `extractMemories.ts` is a faithful miniature of.
-- `IMPLEMENTATION.md` — detailed walkthrough of every module.
+- [`packages/memory-system`](../memory-system/README.md)：本项目使用的持久化记忆子系统。
+- 主项目 `src/query.ts`：本演示所对齐的生产查询循环。
+- 主项目 `src/services/extractMemories/`：本演示 `extractMemories.ts` 的原型来源。
+- `IMPLEMENTATION.md`：逐模块深度讲解。
