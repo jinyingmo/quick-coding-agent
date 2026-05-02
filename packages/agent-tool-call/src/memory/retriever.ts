@@ -4,7 +4,7 @@
  * Memory retrieval and search.
  *
  * Two retrieval modes:
- *   1. LLM mode (default): Calls Kimi API to semantically select relevant memories
+ *   1. LLM mode (default): Calls LLM API to semantically select relevant memories
  *   2. Fallback mode: Local keyword-based relevance scoring when LLM is unavailable
  */
 
@@ -31,11 +31,11 @@ export type RetrievalResult = {
 const MAX_RELEVANT = 5
 
 /**
- * 查找与查询相关的记忆文件：优先使用 Kimi LLM 语义选择，不可用时回退到本地关键字评分。
+ * 查找与查询相关的记忆文件：优先使用 LLM 语义选择，不可用时回退到本地关键字评分。
  *
  * Find memory files relevant to a query.
  *
- * By default, attempts to use the Kimi LLM API for semantic relevance selection.
+ * By default, attempts to use the LLM API for semantic relevance selection.
  * If the API is unavailable (no key, network error, timeout), gracefully falls
  * back to local keyword-based scoring.
  *

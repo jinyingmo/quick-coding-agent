@@ -4,7 +4,7 @@
  * CLI entry point.
  *
  *   npm run demo            → scripted offline demo (no API key required)
- *   npm run repl            → interactive REPL via Kimi/Moonshot
+ *   npm run repl            → interactive REPL via LLM
  *   node dist/cli.js        → defaults to --repl
  *
  * Both modes share the same Agent / queryLoop / extractor — only the model
@@ -39,7 +39,7 @@ async function main() {
   }
 
   // REPL mode
-  if (!process.env.LLM_API_KEY && !process.env.KIMI_API_KEY) {
+  if (!process.env.LLM_API_KEY) {
     console.error('\n[!] LLM_API_KEY is not set — cannot run --repl.')
     console.error('    Either:')
     console.error('      • cp .env.example .env  and add your key, or')
@@ -47,7 +47,7 @@ async function main() {
     process.exit(1)
   }
 
-  const model = process.env.LLM_MODEL ?? process.env.KIMI_MODEL ?? 'moonshot-v1-8k'
+  const model = process.env.LLM_MODEL ?? 'moonshot-v1-8k'
   console.log('\n╭──────────────────────────────────────────────────────────╮')
   console.log('│  Codey REPL — LLM-powered agent with persistent memory  │')
   console.log('├──────────────────────────────────────────────────────────┤')

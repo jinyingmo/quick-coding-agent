@@ -5,7 +5,7 @@
  *
  * This is the integration point with the existing memory-system demo:
  *   `findRelevantMemories(query, memoryDir, options)` is called directly,
- *   so the Kimi-powered semantic selection (or local keyword fallback) is
+ *   so the LLM-powered semantic selection (or local keyword fallback) is
  *   reused without re-implementing it here.
  *
  * The result is rendered as a compact text manifest the LLM can read back —

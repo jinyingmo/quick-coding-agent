@@ -10,6 +10,7 @@
  *   POST {baseUrl}/chat/completions
  */
 
+import OpenAI from 'openai'
 import type { MemoryConfig } from './config.js'
 import type { MemoryHeader } from './types.js'
 import { formatMemoryManifest } from './scanner.js'
@@ -67,51 +68,28 @@ export async function callLLMSelectMemories(
 
   const userContent = `Query: ${query}\n\nAvailable memories:\n${manifest}${toolsSection}`
 
-  const requestBody = {
-    model: config.llmModel,
-    messages: [
-      { role: 'system', content: SELECT_MEMORIES_SYSTEM_PROMPT },
-      { role: 'user', content: userContent },
-    ],
-    temperature: 0,
-    max_tokens: 256,
-  }
-
-  const url = `${config.llmBaseUrl}/chat/completions`
+  const client = new OpenAI({
+    apiKey: config.llmApiKey,
+    baseURL: config.llmBaseUrl,
+    timeout: config.llmTimeoutMs,
+    maxRetries: 0,
+  })
 
   try {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), config.llmTimeoutMs)
-
-    // Link external signal if provided
-    if (signal) {
-      signal.addEventListener('abort', () => controller.abort())
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.llmApiKey}`,
+    const response = await client.chat.completions.create(
+      {
+        model: config.llmModel,
+        messages: [
+          { role: 'system', content: SELECT_MEMORIES_SYSTEM_PROMPT },
+          { role: 'user', content: userContent },
+        ],
+        temperature: 0,
+        max_tokens: 256,
       },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    })
+      { signal },
+    )
 
-    clearTimeout(timeoutId)
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'unknown error')
-      throw new Error(`LLM API ${response.status}: ${errorText}`)
-    }
-
-    const data = (await response.json()) as {
-      choices?: Array<{
-        message?: { content?: string }
-      }>
-    }
-
-    const content = data.choices?.[0]?.message?.content
+    const content = response.choices[0]?.message?.content
     if (!content) {
       throw new Error('LLM API returned empty content')
     }

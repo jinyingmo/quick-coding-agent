@@ -1,7 +1,7 @@
 {
   "name": "@quick-coding-agent/agent-tool-call",
   "version": "1.0.0",
-  "description": "Simplified Claude-Code-style agent with tool calling and built-in persistent memory demo (Kimi/Moonshot LLM)",
+  "description": "Simplified Claude-Code-style agent with tool calling and built-in persistent memory demo",
   "type": "module",
   "scripts": {
     "build": "tsup",
@@ -20,12 +20,12 @@
     "tool-calling",
     "claude-code",
     "memory",
-    "kimi",
     "moonshot"
   ],
   "license": "MIT",
   "dependencies": {
     "dotenv": "^16.6.1",
+    "openai": "^6.35.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

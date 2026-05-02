@@ -1,7 +1,7 @@
 /** 中文说明：核心 agent 模块。 */
 
 /**
- * Kimi (Moonshot) LLM client with tool-calling support.
+ * LLM client with tool-calling support, built on the OpenAI SDK.
  *
  * Moonshot's HTTP API is OpenAI-compatible (POST /chat/completions, with the
  * standard `tools` / `tool_calls` shape), so we adopt OpenAI's wire format and
@@ -14,6 +14,7 @@
  * can stay agnostic of the wire format.
  */
 
+import OpenAI from 'openai'
 import { z } from 'zod'
 import type {
   AssistantMessage,
@@ -24,35 +25,6 @@ import type {
   ToolUseBlock,
 } from './types.js'
 import { createAssistantMessage } from './types.js'
-
-// ────────────────────────────────────────────────────────────────────────────
-// Retry helpers
-// ────────────────────────────────────────────────────────────────────────────
-
-// 遇到限流或服务端错误时重试；客户端错误（4xx 除 429）不重试
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
-const MAX_RETRIES = 3
-const RETRY_BASE_MS = 1_000
-const RETRY_MAX_MS = 30_000
-
-function retryDelayMs(attempt: number, retryAfterHeader: string | null): number {
-  if (retryAfterHeader) {
-    const s = parseInt(retryAfterHeader, 10)
-    if (!isNaN(s) && s > 0) return Math.min(s * 1000, RETRY_MAX_MS)
-  }
-  // 指数退避 + ±20% 随机抖动，防止惊群效应
-  const base = RETRY_BASE_MS * 2 ** attempt
-  const jitter = base * 0.2 * (Math.random() * 2 - 1)
-  return Math.min(base + jitter, RETRY_MAX_MS)
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) { reject(new Error('aborted')); return }
-    const timer = setTimeout(resolve, ms)
-    signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('aborted')) }, { once: true })
-  })
-}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Config
@@ -66,13 +38,12 @@ export type LLMConfig = {
 }
 
 // 从环境变量加载 LLM 配置（API Key、模型名称、基础 URL、超时时间）
-// 优先读取通用的 LLM_* 变量，向后兼容旧的 KIMI_* 变量
 export function loadLLMConfig(): LLMConfig {
   return {
-    apiKey: process.env.LLM_API_KEY ?? process.env.KIMI_API_KEY,
-    model: process.env.LLM_MODEL ?? process.env.KIMI_MODEL ?? 'moonshot-v1-8k',
-    baseUrl: process.env.LLM_BASE_URL ?? process.env.KIMI_BASE_URL ?? 'https://api.moonshot.cn/v1',
-    timeoutMs: parseInt(process.env.LLM_TIMEOUT_MS ?? process.env.KIMI_TIMEOUT_MS ?? '30000', 10),
+    apiKey: process.env.LLM_API_KEY,
+    model: process.env.LLM_MODEL ?? 'moonshot-v1-8k',
+    baseUrl: process.env.LLM_BASE_URL ?? 'https://api.moonshot.cn/v1',
+    timeoutMs: parseInt(process.env.LLM_TIMEOUT_MS ?? '30000', 10),
   }
 }
 
@@ -81,16 +52,24 @@ export function isLLMAvailable(cfg: LLMConfig = loadLLMConfig()): boolean {
   return !!cfg.apiKey && cfg.apiKey.length > 0
 }
 
+function makeClient(cfg: LLMConfig, maxRetries: number): OpenAI {
+  return new OpenAI({
+    apiKey: cfg.apiKey,
+    baseURL: cfg.baseUrl,
+    timeout: cfg.timeoutMs,
+    maxRetries,
+  })
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Zod → JSON Schema (minimal, just enough for tool definitions)
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Convert a Zod schema to the JSON Schema subset Moonshot accepts.
- * We intentionally keep this small: object / string / number / boolean,
- * plus optional + description, which covers everything our tools declare.
+ * Convert a Zod schema to the JSON Schema subset the API accepts.
+ * Covers object / string / number / boolean / array, plus optional + description.
  */
-/** 将 Zod schema 转换为 Moonshot API 兼容的 JSON Schema 子集。 */
+/** 将 Zod schema 转换为 API 兼容的 JSON Schema 子集。 */
 export function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
   if (schema instanceof z.ZodObject) {
     const shape = schema.shape as Record<string, z.ZodType>
@@ -133,27 +112,10 @@ export function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
 // Internal ↔ OpenAI message translation
 // ────────────────────────────────────────────────────────────────────────────
 
-type OpenAIToolCall = {
-  id: string
-  type: 'function'
-  function: { name: string; arguments: string }
-}
-
-type OpenAIMessage =
-  | { role: 'system'; content: string }
-  | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string | null; tool_calls?: OpenAIToolCall[] }
-  | { role: 'tool'; content: string; tool_call_id: string }
-
-/**
- * Flatten a single internal Message into one or more OpenAI messages.
- * A user message containing tool_result blocks expands into multiple
- * `role: 'tool'` entries, exactly mirroring the SDK's expectation.
- */
 /** 将内部 Message 格式展开为一个或多个 OpenAI 兼容消息。 */
-function toOpenAIMessages(message: Message): OpenAIMessage[] {
+function toOpenAIMessages(message: Message): OpenAI.ChatCompletionMessageParam[] {
   if (message.type === 'user') {
-    const out: OpenAIMessage[] = []
+    const out: OpenAI.ChatCompletionMessageParam[] = []
     let textBuffer = ''
     for (const block of message.content) {
       if (block.type === 'text') {
@@ -174,7 +136,7 @@ function toOpenAIMessages(message: Message): OpenAIMessage[] {
 
   // assistant
   let text = ''
-  const toolCalls: OpenAIToolCall[] = []
+  const toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> = []
   for (const block of message.content) {
     if (block.type === 'text') {
       text += (text ? '\n' : '') + block.text
@@ -202,8 +164,8 @@ function toOpenAIMessages(message: Message): OpenAIMessage[] {
 export function buildOpenAIMessages(
   systemPrompt: string,
   history: Message[],
-): OpenAIMessage[] {
-  const out: OpenAIMessage[] = [{ role: 'system', content: systemPrompt }]
+): OpenAI.ChatCompletionMessageParam[] {
+  const out: OpenAI.ChatCompletionMessageParam[] = [{ role: 'system', content: systemPrompt }]
   for (const m of history) {
     out.push(...toOpenAIMessages(m))
   }
@@ -224,11 +186,9 @@ export type LLMCallOptions = {
 
 /**
  * Invoke the LLM once, returning a fully-formed AssistantMessage.
- *
- * The caller (queryLoop) decides whether to terminate (no tool_use blocks)
- * or to dispatch the tool calls and run another iteration.
+ * Retries on transient errors (429, 5xx) are handled by the OpenAI SDK.
  */
-/** 调用 LLM，遇到限流或服务端错误时自动重试（最多 3 次，指数退避）。 */
+/** 调用 LLM，SDK 自动处理限流和服务端错误重试（最多 3 次）。 */
 export async function callLLM(opts: LLMCallOptions): Promise<AssistantMessage> {
   const cfg = opts.config ?? loadLLMConfig()
   if (!cfg.apiKey) {
@@ -237,8 +197,10 @@ export async function callLLM(opts: LLMCallOptions): Promise<AssistantMessage> {
     )
   }
 
-  const tools = opts.tools.map(t => ({
-    type: 'function' as const,
+  const client = makeClient(cfg, 3)
+
+  const tools: OpenAI.ChatCompletionTool[] = opts.tools.map(t => ({
+    type: 'function',
     function: {
       name: t.name,
       description: t.description,
@@ -246,107 +208,48 @@ export async function callLLM(opts: LLMCallOptions): Promise<AssistantMessage> {
     },
   }))
 
-  const body = {
-    model: cfg.model,
-    messages: buildOpenAIMessages(opts.systemPrompt, opts.history),
-    tools,
-    tool_choice: 'auto' as const,
-    temperature: 0.2,
-  }
+  const messages = buildOpenAIMessages(opts.systemPrompt, opts.history)
 
   if (process.env.DEBUG) {
-    console.error('[llm] request', { model: body.model, messages: body.messages.length, tools: tools.length })
+    console.error('[llm] request', { model: cfg.model, messages: messages.length, tools: tools.length })
   }
 
-  let lastError: Error = new Error('LLM call failed after retries')
+  const response = await client.chat.completions.create(
+    { model: cfg.model, messages, tools, tool_choice: 'auto', temperature: 0.2 },
+    { signal: opts.signal },
+  )
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    if (opts.signal?.aborted) throw new Error('Aborted')
+  const choice = response.choices[0]
+  const msg = choice?.message
+  if (!msg) throw new Error('LLM API returned no choices/message')
 
-    // 每次 attempt 独立创建 AbortController，避免超时状态污染重试
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), cfg.timeoutMs)
-    opts.signal?.addEventListener('abort', () => controller.abort(), { once: true })
-
-    let response: Response
-    try {
-      response = await fetch(`${cfg.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${cfg.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      })
-    } catch (err) {
-      clearTimeout(timeout)
-      lastError = err as Error
-      if (attempt < MAX_RETRIES && !opts.signal?.aborted) {
-        await sleep(retryDelayMs(attempt, null), opts.signal)
-        continue
-      }
-      throw lastError
-    }
-    clearTimeout(timeout)
-
-    if (!response.ok) {
-      if (RETRYABLE_STATUS.has(response.status) && attempt < MAX_RETRIES && !opts.signal?.aborted) {
-        const retryAfter = response.headers.get('retry-after')
-        const delay = retryDelayMs(attempt, retryAfter)
-        if (process.env.DEBUG) {
-          console.error(`[llm] HTTP ${response.status}, retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`)
-        }
-        await sleep(delay, opts.signal)
-        continue
-      }
-      const text = await response.text().catch(() => '<no body>')
-      throw new Error(`LLM API ${response.status}: ${text}`)
-    }
-
-    const json = (await response.json()) as {
-      choices?: Array<{
-        message?: {
-          content?: string | null
-          tool_calls?: OpenAIToolCall[]
-        }
-        finish_reason?: string
-      }>
-    }
-
-    const choice = json.choices?.[0]
-    const msg = choice?.message
-    if (!msg) throw new Error('LLM API returned no choices/message')
-
-    if (process.env.DEBUG) {
-      console.error('[llm] response', {
-        finish_reason: choice?.finish_reason,
-        content_len: msg.content?.length ?? 0,
-        tool_calls: msg.tool_calls?.length ?? 0,
-      })
-    }
-
-    const blocks: ContentBlock[] = []
-    if (msg.content) blocks.push({ type: 'text', text: msg.content })
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
-      for (const call of msg.tool_calls) {
-        let parsed: Record<string, unknown> = {}
-        try {
-          parsed = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>
-        } catch {
-          parsed = { __raw: call.function.arguments }
-        }
-        blocks.push({ type: 'tool_use', id: call.id, name: call.function.name, input: parsed } satisfies ToolUseBlock)
-      }
-    }
-    if (blocks.length === 0) blocks.push({ type: 'text', text: '' })
-
-    const stopReason: AssistantMessage['stopReason'] =
-      msg.tool_calls && msg.tool_calls.length > 0 ? 'tool_use' : 'end_turn'
-    return createAssistantMessage(blocks, stopReason)
+  if (process.env.DEBUG) {
+    console.error('[llm] response', {
+      finish_reason: choice.finish_reason,
+      content_len: msg.content?.length ?? 0,
+      tool_calls: msg.tool_calls?.length ?? 0,
+    })
   }
 
-  throw lastError
+  const blocks: ContentBlock[] = []
+  if (msg.content) blocks.push({ type: 'text', text: msg.content })
+  if (msg.tool_calls && msg.tool_calls.length > 0) {
+    for (const call of msg.tool_calls) {
+      if (call.type !== 'function') continue
+      let parsed: Record<string, unknown> = {}
+      try {
+        parsed = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>
+      } catch {
+        parsed = { __raw: call.function.arguments }
+      }
+      blocks.push({ type: 'tool_use', id: call.id, name: call.function.name, input: parsed } satisfies ToolUseBlock)
+    }
+  }
+  if (blocks.length === 0) blocks.push({ type: 'text', text: '' })
+
+  const stopReason: AssistantMessage['stopReason'] =
+    msg.tool_calls && msg.tool_calls.length > 0 ? 'tool_use' : 'end_turn'
+  return createAssistantMessage(blocks, stopReason)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -372,51 +275,8 @@ export type LLMStreamResult = {
   usage?: TokenUsage
 }
 
-type SSEEvent = {
-  data: string
-}
-
-/**
- * 解析 SSE (Server-Sent Events) 流，逐行 yield 每个事件。
- */
-async function* parseSSEStream(response: Response): AsyncGenerator<SSEEvent> {
-  if (!response.body) {
-    throw new Error('Response body is empty, streaming requires a readable body')
-  }
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        if (trimmed.startsWith('data: ')) {
-          const data = trimmed.slice(6)
-          if (data === '[DONE]') return
-          yield { data }
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock()
-  }
-}
-
 /**
  * 流式调用 LLM，通过 AsyncGenerator 逐步返回文本增量和工具调用分块。
- *
- * 与 `callLLM()` 不同，此函数不会等待完整响应，而是通过 yield 逐步
- * 推送内容，适合与 SSE/WebSocket 配合实现实时输出。
  *
  * @example
  *   for await (const chunk of callLLMStream(opts)) {
@@ -431,8 +291,10 @@ export async function* callLLMStream(opts: LLMCallOptions): AsyncGenerator<LLMSt
     )
   }
 
-  const tools = opts.tools.map(t => ({
-    type: 'function' as const,
+  const client = makeClient(cfg, 0)
+
+  const tools: OpenAI.ChatCompletionTool[] = opts.tools.map(t => ({
+    type: 'function',
     function: {
       name: t.name,
       description: t.description,
@@ -440,141 +302,82 @@ export async function* callLLMStream(opts: LLMCallOptions): AsyncGenerator<LLMSt
     },
   }))
 
-  const body = {
-    model: cfg.model,
-    messages: buildOpenAIMessages(opts.systemPrompt, opts.history),
-    tools,
-    tool_choice: 'auto' as const,
-    temperature: 0.2,
-    stream: true,
-    stream_options: { include_usage: true },
-  }
+  const stream = await client.chat.completions.create(
+    {
+      model: cfg.model,
+      messages: buildOpenAIMessages(opts.systemPrompt, opts.history),
+      tools,
+      tool_choice: 'auto',
+      temperature: 0.2,
+      stream: true,
+      stream_options: { include_usage: true },
+    },
+    { signal: opts.signal },
+  )
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), cfg.timeoutMs)
-  if (opts.signal) {
-    opts.signal.addEventListener('abort', () => controller.abort())
-  }
-
-  let response: Response
-  try {
-    response = await fetch(`${cfg.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    })
-  } finally {
-    clearTimeout(timeout)
-  }
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '<no body>')
-    throw new Error(`LLM API ${response.status}: ${text}`)
-  }
-
-  // 拼接增量内容
   let fullText = ''
   const toolCallsIndex = new Map<number, { id: string; name: string; arguments: string }>()
-
   let usage: TokenUsage | undefined
 
-  try {
-    for await (const event of parseSSEStream(response)) {
-      const json = JSON.parse(event.data) as {
-        choices?: Array<{
-          delta?: {
-            content?: string | null
-            tool_calls?: Array<{
-              index?: number
-              id?: string
-              function?: { name?: string; arguments?: string }
-            }>
-          }
-          finish_reason?: string | null
-        }>
-        usage?: {
-          prompt_tokens: number
-          completion_tokens: number
-          total_tokens: number
-        }
+  for await (const chunk of stream) {
+    if (chunk.usage) {
+      usage = {
+        promptTokens: chunk.usage.prompt_tokens,
+        completionTokens: chunk.usage.completion_tokens,
+        totalTokens: chunk.usage.total_tokens,
       }
+      yield { type: 'done', finishReason: 'stop', usage }
+      continue
+    }
 
-      // 处理 usage 信息（某些 API 在最后帧返回）
-      if (json.usage) {
-        usage = {
-          promptTokens: json.usage.prompt_tokens,
-          completionTokens: json.usage.completion_tokens,
-          totalTokens: json.usage.total_tokens,
-        }
-        yield { type: 'done', finishReason: 'stop', usage }
-        continue
-      }
+    const choice = chunk.choices?.[0]
+    if (!choice) continue
 
-      const choice = json.choices?.[0]
-      if (!choice) continue
+    const delta = choice.delta
 
-      const delta = choice.delta
-      if (!delta) continue
+    if (delta.content) {
+      fullText += delta.content
+      yield { type: 'text_delta', text: delta.content }
+    }
 
-      // 文本增量
-      if (delta.content) {
-        fullText += delta.content
-        yield { type: 'text_delta', text: delta.content }
-      }
-
-      // 工具调用增量
-      if (delta.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const idx = tc.index ?? 0
-          if (tc.id) {
-            toolCallsIndex.set(idx, {
-              id: tc.id,
-              name: tc.function?.name ?? '',
-              arguments: tc.function?.arguments ?? '',
-            })
-          } else if (tc.function?.arguments) {
-            const existing = toolCallsIndex.get(idx)
-            if (existing) {
-              existing.arguments += tc.function.arguments
-            } else {
-              toolCallsIndex.set(idx, {
-                id: '',
-                name: tc.function?.name ?? '',
-                arguments: tc.function.arguments,
-              })
-            }
-          }
-
-          const current = toolCallsIndex.get(idx)
-          if (current) {
-            yield {
-              type: 'tool_call_delta',
-              id: current.id,
-              name: current.name || undefined,
-              arguments: current.arguments,
-            }
+    if (delta.tool_calls) {
+      for (const tc of delta.tool_calls) {
+        const idx = tc.index ?? 0
+        if (tc.id) {
+          toolCallsIndex.set(idx, {
+            id: tc.id,
+            name: tc.function?.name ?? '',
+            arguments: tc.function?.arguments ?? '',
+          })
+        } else if (tc.function?.arguments) {
+          const existing = toolCallsIndex.get(idx)
+          if (existing) {
+            existing.arguments += tc.function.arguments
+          } else {
+            toolCallsIndex.set(idx, { id: '', name: tc.function?.name ?? '', arguments: tc.function.arguments })
           }
         }
-      }
 
-      // 结束标记
-      if (choice.finish_reason) {
-        yield { type: 'done', finishReason: choice.finish_reason }
+        const current = toolCallsIndex.get(idx)
+        if (current) {
+          yield {
+            type: 'tool_call_delta',
+            id: current.id,
+            name: current.name || undefined,
+            arguments: current.arguments,
+          }
+        }
       }
     }
-  } finally {
-    // 确保 response body 被消费完毕
+
+    if (choice.finish_reason) {
+      yield { type: 'done', finishReason: choice.finish_reason }
+    }
   }
 
   // 构建最终的 AssistantMessage
   const blocks: ContentBlock[] = []
-  if (fullText) {
-    blocks.push({ type: 'text', text: fullText })
-  }
+  if (fullText) blocks.push({ type: 'text', text: fullText })
 
   const sortedToolCalls = [...toolCallsIndex.entries()]
     .sort(([a], [b]) => a - b)
@@ -588,17 +391,10 @@ export async function* callLLMStream(opts: LLMCallOptions): AsyncGenerator<LLMSt
     } catch {
       parsed = { __raw: tc.arguments }
     }
-    blocks.push({
-      type: 'tool_use',
-      id: tc.id,
-      name: tc.name,
-      input: parsed,
-    })
+    blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: parsed })
   }
 
-  if (blocks.length === 0) {
-    blocks.push({ type: 'text', text: '' })
-  }
+  if (blocks.length === 0) blocks.push({ type: 'text', text: '' })
 
   const stopReason: AssistantMessage['stopReason'] =
     sortedToolCalls.length > 0 ? 'tool_use' : 'end_turn'

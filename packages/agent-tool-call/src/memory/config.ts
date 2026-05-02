@@ -4,7 +4,6 @@
  * Configuration management for the memory system.
  *
  * Reads LLM_* environment variables for OpenAI-compatible API integration.
- * Falls back to legacy KIMI_* variables for backwards compatibility.
  * Supports .env file via dotenv (loaded in cli.ts).
  */
 
@@ -23,16 +22,15 @@ export interface MemoryConfig {
 
 /**
  * 从环境变量加载记忆系统配置，支持通过 overrides 覆盖。
- * 优先读取通用的 LLM_* 变量，向后兼容旧的 KIMI_* 变量。
  *
  * Load configuration from environment variables.
  */
 export function loadConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
   return {
-    llmApiKey: process.env.LLM_API_KEY ?? process.env.KIMI_API_KEY,
-    llmModel: process.env.LLM_MODEL ?? process.env.KIMI_MODEL ?? 'moonshot-v1-8k',
-    llmBaseUrl: process.env.LLM_BASE_URL ?? process.env.KIMI_BASE_URL ?? 'https://api.moonshot.cn/v1',
-    llmTimeoutMs: parseInt(process.env.LLM_TIMEOUT_MS ?? process.env.KIMI_TIMEOUT_MS ?? '10000', 10),
+    llmApiKey: process.env.LLM_API_KEY,
+    llmModel: process.env.LLM_MODEL ?? 'moonshot-v1-8k',
+    llmBaseUrl: process.env.LLM_BASE_URL ?? 'https://api.moonshot.cn/v1',
+    llmTimeoutMs: parseInt(process.env.LLM_TIMEOUT_MS ?? '10000', 10),
     memoryDir: process.env.MEMORY_DIR ?? './memory',
     ...overrides,
   }

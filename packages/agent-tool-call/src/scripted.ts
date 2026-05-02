@@ -281,7 +281,6 @@ export async function runScripted(memoryDir: string): Promise<void> {
 
   try {
     delete process.env.LLM_API_KEY
-    delete process.env.KIMI_API_KEY
     await runQueryLoop({
       systemPrompt: '(no-key system prompt)',
       messages: [createUserMessage('Trigger a real LLM call without an API key.')],
