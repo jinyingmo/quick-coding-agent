@@ -63,7 +63,7 @@ export class Agent {
   private readonly extractor: ExtractMemoriesController
   private readonly history: Message[] = []
   private systemPrompt: string | undefined
-  private readonly abortController = new AbortController()
+  private currentAbortController = new AbortController()
   private readonly log: NonNullable<AgentOptions['log']>
   private readonly runtimeWarnings: string[] = []
   private readonly canUseTool: CanUseToolFn
@@ -195,7 +195,7 @@ export class Agent {
       cwd: this.opts.cwd,
       memoryDir: this.opts.memoryDir,
       log: this.log,
-      signal: this.abortController.signal,
+      signal: this.currentAbortController.signal,
     })
 
     this.tools = this.applySkillToolPolicy(resolved.tools)
@@ -283,7 +283,7 @@ export class Agent {
       cwd: this.opts.cwd,
       memoryDir: this.opts.memoryDir,
       log: this.log,
-      signal: this.abortController.signal,
+      signal: this.currentAbortController.signal,
     }
   }
 
@@ -354,7 +354,7 @@ export class Agent {
         systemPrompt: this.systemPrompt!,
         history: this.history,
         tools: this.tools,
-        signal: this.abortController.signal,
+        signal: this.currentAbortController.signal,
       })
 
       let result
@@ -374,13 +374,13 @@ export class Agent {
     } catch (err) {
       const errorMsg = `LLM stream error: ${(err as Error).message}`
       this.log(errorMsg, 'error')
-      const errorMsg2_user: Message = {
+      const errorMessage: Message = {
         type: 'assistant',
         uuid: crypto.randomUUID(),
         content: [{ type: 'text', text: errorMsg }],
         stopReason: 'error',
       }
-      this.history.push(errorMsg2_user)
+      this.history.push(errorMessage)
     }
   }
 
@@ -442,9 +442,10 @@ export class Agent {
     return this.runtimeState.activeSkills.map(s => s.id)
   }
 
-  /** 中止当前所有正在运行的操作。 */
+  /** 中止当前所有正在运行的操作，并创建新的 AbortController 以备后续调用。 */
   abort(): void {
-    this.abortController.abort()
+    this.currentAbortController.abort()
+    this.currentAbortController = new AbortController()
   }
 }
 

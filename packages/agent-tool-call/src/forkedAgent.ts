@@ -51,10 +51,19 @@ export async function runForkedAgent(params: ForkedAgentParams): Promise<QueryRe
   })
 }
 
-/** 从消息列表中提取所有 write_file 调用写入的文件路径。 */
-export function extractWrittenPaths(messages: Message[]): string[] {
-  const paths: string[] = []
+// 遍历所有消息中的 write_file 工具调用，对每个符合条件的调用执行回调
+// 如果任一回调返回 false 则提前终止迭代
+function forEachWriteFileCall(
+  messages: Message[],
+  callback: (path: string) => boolean | void,
+  startUuid?: string,
+): void {
+  let started = startUuid === undefined
   for (const m of messages) {
+    if (!started) {
+      if (m.uuid === startUuid) started = true
+      continue
+    }
     if (m.type !== 'assistant') continue
     for (const block of m.content) {
       if (
@@ -62,10 +71,18 @@ export function extractWrittenPaths(messages: Message[]): string[] {
         block.name === 'write_file' &&
         typeof (block.input as { file_path?: unknown }).file_path === 'string'
       ) {
-        paths.push((block.input as { file_path: string }).file_path)
+        if (callback((block.input as { file_path: string }).file_path) === false) return
       }
     }
   }
+}
+
+/** 从消息列表中提取所有 write_file 调用写入的文件路径。 */
+export function extractWrittenPaths(messages: Message[]): string[] {
+  const paths: string[] = []
+  forEachWriteFileCall(messages, (path) => {
+    paths.push(path)
+  })
   return [...new Set(paths)]
 }
 
@@ -75,25 +92,14 @@ export function hasMemoryWritesSince(
   sinceUuid: string | undefined,
   memoryDir: string,
 ): boolean {
-  let found = sinceUuid === undefined
-  for (const m of messages) {
-    if (!found) {
-      if (m.uuid === sinceUuid) found = true
-      continue
+  let found = false
+  forEachWriteFileCall(messages, (path) => {
+    if (path.startsWith(memoryDir)) {
+      found = true
+      return false // 提前终止
     }
-    if (m.type !== 'assistant') continue
-    for (const block of m.content) {
-      if (
-        block.type === 'tool_use' &&
-        block.name === 'write_file' &&
-        typeof (block.input as { file_path?: unknown }).file_path === 'string' &&
-        (block.input as { file_path: string }).file_path.startsWith(memoryDir)
-      ) {
-        return true
-      }
-    }
-  }
-  return false
+  }, sinceUuid)
+  return found
 }
 
 export type { AssistantMessage }
