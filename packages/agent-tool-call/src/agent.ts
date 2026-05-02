@@ -3,6 +3,7 @@
 import { delimiter, resolve } from 'path'
 import { allowAllPermission } from './permissions.js'
 import { runQueryLoop, type QueryResult, type StopHookFn } from './query.js'
+import { callLLMStream, type LLMStreamChunk, type TokenUsage } from './llm.js'
 import {
   initExtractMemories,
   type ExtractMemoriesController,
@@ -68,6 +69,8 @@ export class Agent {
   private readonly canUseTool: CanUseToolFn
   private readonly autoExtractMemories: boolean
   private lastSavedMemoryPaths: string[] = []
+  /** 上次 LLM 调用的 Token 用量（流式模式填充） */
+  public lastUsage: TokenUsage | undefined
 
   private runtimeState: RuntimeState | undefined
   private runtimeInitPromise: Promise<void> | undefined
@@ -324,6 +327,61 @@ export class Agent {
       throw new Error(`Human approval required: ${result.reason ?? 'This action requires review.'}`)
     }
     return result.finalMessage ? getText(result.finalMessage) : ''
+  }
+
+  /**
+   * 流式聊天：逐步 yield LLM 响应块。
+   *
+   * 适用于需要实时展示输出文本的场景（如 SSE / WebSocket 推送）。
+   * 注意：流式模式下不支持工具调用循环，如需工具调用请使用非流式 `chat()`。
+   *
+   * @example
+   *   for await (const chunk of agent.streamChat('Hello')) {
+   *     if (chunk.type === 'text_delta') process.stdout.write(chunk.text)
+   *   }
+   *   console.log('Tokens:', agent.lastUsage)
+   */
+  async *streamChat(userInput: string): AsyncGenerator<LLMStreamChunk, void> {
+    const skillChanged = await this.applySkillMentions(userInput)
+    if (!this.systemPrompt || skillChanged) {
+      await this.refreshSystemPrompt()
+    }
+
+    this.history.push(createUserMessage(userInput))
+
+    try {
+      const gen = callLLMStream({
+        systemPrompt: this.systemPrompt!,
+        history: this.history,
+        tools: this.tools,
+        signal: this.abortController.signal,
+      })
+
+      let result
+      while (true) {
+        const { value, done } = await gen.next()
+        if (done) {
+          result = value
+          break
+        }
+        yield value
+      }
+
+      if (result) {
+        this.lastUsage = result.usage
+        this.history.push(result.assistant)
+      }
+    } catch (err) {
+      const errorMsg = `LLM stream error: ${(err as Error).message}`
+      this.log(errorMsg, 'error')
+      const errorMsg2_user: Message = {
+        type: 'assistant',
+        uuid: crypto.randomUUID(),
+        content: [{ type: 'text', text: errorMsg }],
+        stopReason: 'error',
+      }
+      this.history.push(errorMsg2_user)
+    }
   }
 
   /** 立即触发记忆提取并等待完成，返回本次保存的记忆文件路径。 */

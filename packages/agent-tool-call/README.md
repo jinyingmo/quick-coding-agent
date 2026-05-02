@@ -1,33 +1,14 @@
-# Agent Tool-Call 演示
+# Agent Tool-Call
 
-这是一个可运行的、**形态接近 Claude Code 的 agent**，围绕主项目最核心的三个思路构建：
+这是一个可运行的、**形态接近 Claude Code 的 agent**，围绕核心思路构建：
 
 1. **查询循环（Query loop）**：LLM 产出 `tool_use` 块，运行时并行执行工具，结果以 `tool_result` 回传，循环往复直到模型停止。
-2. **带独立权限策略的 Fork 子 Agent**：后台任务（本演示中的记忆抽取）在隔离上下文中运行，继承父级提示缓存，但通过 `CanUseToolFn` 进行沙箱限制。
-3. **Stop hooks**：主循环结束后，以 fire-and-forget 方式执行副作用任务（抽取记忆、自动保存、遥测等），不阻塞用户拿到回答。
+2. **带独立权限策略的 Fork 子 Agent**：后台任务（如记忆抽取）在隔离上下文中运行，继承父级上下文，通过 `CanUseToolFn` 沙箱限制。
+3. **Stop hooks**：主循环结束后，fire-and-forget 执行副作用（抽取记忆、遥测），不阻塞用户拿到回答。
+4. **MCP 与 Skills**：支持连接外部 MCP 服务器扩展工具集，通过 Skills 注入领域知识和工具白名单。
+5. **流式响应**：支持 SSE 实时推送 LLM 输出，Token 用量透明可追溯。
 
-持久化记忆子系统现在已经内置在本包中，直接复用 `src/memory/*` 下的 `findRelevantMemories`、`buildMemoryPrompt`、`saveMemory` 等能力，因此记忆链路是**端到端真实可运行**的，而非伪造。
-
-> **一句话概括：**“Claude Code 的 `query` 循环是什么样？这个仓库把它提炼为约 1.2k 行 TypeScript，你可以在一个下午读透。”
-
----
-
-## 演示内容
-
-| 概念（对应主项目） | 在本项目中的位置 |
-|---|---|
-| `Tool` 接口（`name` / `description` / `inputSchema` / `isReadOnly` / `call`） | `src/types.ts`, `src/tools/*.ts` |
-| 权限闸门（`CanUseToolFn`, allow / deny / updatedInput） | `src/permissions.ts` |
-| 查询循环（`tool_use` ↔ `tool_result` 直到 `end_turn`） | `src/query.ts` |
-| 继承父上下文的 Fork Agent | `src/forkedAgent.ts` |
-| Stop hooks（模型完成后触发后台任务） | `src/agent.ts`, `src/extractMemories.ts` |
-| 主写入与后台抽取互斥 | `src/extractMemories.ts` (`hasMemoryWritesSince`) |
-| 节流 / 单飞 / 尾随重跑机制 | `src/extractMemories.ts` |
-| OpenAI 兼容的工具调用（Moonshot/Kimi） | `src/llm.ts` |
-| 感知记忆的系统提示词 | `src/systemPrompt.ts`（调用 `buildMemoryPrompt`） |
-| 能力提供器（本地 + MCP） | `src/capabilities/*`, `src/mcp/*` |
-| Skills 加载 / 解析 / 提示注入 | `src/skills/*`, `src/agent.ts` |
-| 离线、确定性演示（无需 LLM Key） | `src/scripted.ts` |
+> "Claude Code 的 Agent 循环是什么样？这个仓库把它提炼为可运行的 TypeScript。"
 
 ---
 
@@ -35,26 +16,25 @@
 
 ```bash
 cd packages/agent-tool-call
-npm install
+pnpm install
 
-# 离线脚本演示 —— 不需要 API key，包含 3 个端到端场景
-npm run demo
+# 离线脚本演示 — 不需要 API key，3 个端到端场景
+pnpm demo
 
-# 交互式 REPL —— 需要在 .env 中配置 KIMI_API_KEY
+# 交互式 REPL — 需要 KIMI_API_KEY
 cp .env.example .env
-# 编辑 .env，填入你的 Moonshot key
-npm run repl
+# 编辑 .env，填入 Moonshot key
+pnpm repl
 ```
 
-默认会使用当前包内的记忆路径 `./memory`。你可以通过 `MEMORY_DIR=...` 覆盖。
+默认会使用当前包内的记忆路径 `./memory`，可通过 `MEMORY_DIR=...` 覆盖。
 
-### P0 HTTP 服务
+### P0 HTTP(S) 服务
 
-这版仓库还提供了一套**单实例、内存态、带审批的 P0 server**，适合内测或本地联调。
-
-启动前先准备一个 API key 身份映射：
+支持 HTTP 和 HTTPS（配置 TLS 后自动切换），带 CORS、流式 SSE、Token 追踪。
 
 ```bash
+# 1. 准备 API Key 身份
 export P0_API_KEYS='[
   {
     "token": "local-dev-token",
@@ -64,64 +44,64 @@ export P0_API_KEYS='[
     "memoryDir": "/abs/path/to/quick-coding-agent/packages/agent-tool-call/memory"
   }
 ]'
-```
 
-然后启动服务：
+# 2. 启动（默认端口 8787）
+pnpm agent:serve
 
-```bash
+# 3. 可选：HTTPS 模式
+export TLS_CERT=/path/to/cert.pem
+export TLS_KEY=/path/to/key.pem
+pnpm agent:serve
+
+# 4. 可选：开启 CORS
+export CORS_ORIGIN=https://example.com
 pnpm agent:serve
 ```
 
-默认端口是 `8787`，也可以覆盖：
+### API 概览
+
+| Method | Path | 说明 |
+|--------|------|------|
+| `GET` | `/healthz` | 健康检查 |
+| `POST` | `/sessions` | 创建会话 |
+| `GET` | `/sessions/:id` | 查看会话信息 |
+| `DELETE` | `/sessions/:id` | 释放会话 |
+| `GET` | `/sessions/:id/messages` | 查看消息历史 |
+| `POST` | `/sessions/:id/messages` | 发送消息（支持 `stream: true` 启用 SSE） |
+| `POST` | `/sessions/:id/extract-memory` | 触发记忆抽取 |
+| `GET` | `/approvals/:id` | 查看审批详情 |
+| `POST` | `/approvals/:id/approve` | 批准审批 |
+| `POST` | `/approvals/:id/reject` | 拒绝审批 |
+
+### curl 示例
 
 ```bash
-PORT=8788 pnpm agent:serve
-```
-
-最小调用流程：
-
-1. 创建 session
-
-```bash
+# 创建会话
 curl -s http://127.0.0.1:8787/sessions \
   -X POST \
   -H 'Authorization: Bearer local-dev-token'
-```
 
-2. 发送消息
-
-```bash
+# 发送消息
 curl -s http://127.0.0.1:8787/sessions/<session-id>/messages \
   -X POST \
   -H 'Authorization: Bearer local-dev-token' \
   -H 'Content-Type: application/json' \
   -d '{"text":"Summarize the testing guidance in memory."}'
-```
 
-3. 显式触发 memory extraction
+# 流式发送消息（SSE）
+curl -s http://127.0.0.1:8787/sessions/<session-id>/messages \
+  -X POST \
+  -H 'Authorization: Bearer local-dev-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Write a hello world program.","stream":true}'
 
-```bash
+# 触发记忆抽取
 curl -s http://127.0.0.1:8787/sessions/<session-id>/extract-memory \
   -X POST \
   -H 'Authorization: Bearer local-dev-token'
 ```
 
-### P0 API 概览
-
-| Method | Path | 说明 |
-|---|---|---|
-| `GET` | `/healthz` | 健康检查 |
-| `POST` | `/sessions` | 创建内存 session |
-| `GET` | `/sessions/:id` | 查看 session 元信息 |
-| `DELETE` | `/sessions/:id` | 主动释放 session |
-| `GET` | `/sessions/:id/messages` | 查看当前消息历史 |
-| `POST` | `/sessions/:id/messages` | 发送用户消息 |
-| `POST` | `/sessions/:id/extract-memory` | 显式触发记忆抽取 |
-| `GET` | `/approvals/:id` | 查看审批详情 |
-| `POST` | `/approvals/:id/approve` | 批准审批 |
-| `POST` | `/approvals/:id/reject` | 拒绝审批 |
-
-当服务判定操作有风险时，会返回：
+当操作需要审批时返回：
 
 ```json
 {
@@ -130,12 +110,11 @@ curl -s http://127.0.0.1:8787/sessions/<session-id>/extract-memory \
     "status": "confirm_required",
     "approvalId": "apr_xxx",
     "reason": "Human approval required for shell command"
-  },
-  "error": null
+  }
 }
 ```
 
-然后可以用下面的接口批准：
+批准后继续：
 
 ```bash
 curl -s http://127.0.0.1:8787/approvals/<approval-id>/approve \
@@ -143,44 +122,211 @@ curl -s http://127.0.0.1:8787/approvals/<approval-id>/approve \
   -H 'Authorization: Bearer local-dev-token'
 ```
 
-### REPL 命令
+---
+
+## REPL 命令
 
 | 命令 | 作用 |
-|---|---|
-| `/quit` 或 `/exit` | 等待后台任务收尾后退出 |
-| `/history` | 打印当前会话内消息数 |
-| `/reload` | 用最新 `MEMORY.md` 重建系统提示词 |
-| `/memory` | 打印当前记忆目录 |
-| `/tools` | 打印当前加载的工具名（local + MCP） |
-| `/skills` | 打印当前激活的 skill id |
+|------|------|
+| `/quit` / `/exit` | 退出 |
+| `/history` | 打印会话消息数 |
+| `/reload` | 重建系统提示词 |
+| `/memory` | 打印记忆目录路径 |
+| `/tools` | 打印当前加载的工具名 |
+| `/skills` | 打印当前激活的 Skill ID |
 
 ---
 
-## 脚本演示（重点）
+## 项目结构
 
-`npm run demo` 会使用一个很小的 `CannedModel` 跑 3 个离线场景（无需 API）。它执行的是真实查询循环、真实权限检查、真实记忆抽取入口；只有 LLM 被替换为预置响应。
-
-```text
-▶ Scenario 1: main agent searches memory, answers, then extractor fires
-  - turn 1: assistant emits search_memory tool_use
-  - search_memory hits the built-in memory retriever
-  - turn 2: assistant produces final text
-  - stop hook → fire-and-forget runForkedAgent('extract_memories')
-
-▶ Scenario 2: forked extractor tries to write outside memoryDir → DENY
-  - write inside memoryDir  → ALLOW
-  - write to ../../pwned.txt → DENY (permission policy refuses, returns
-    deny block to the model so it can recover)
-
-▶ Scenario 3: runQueryLoop without an API key — graceful error path
-  - LLM call surfaces a precise, actionable error message
+```
+agent-tool-call/
+├── src/
+│   ├── types.ts              # Message / ContentBlock / Tool / ToolUseContext
+│   ├── agent.ts              # Agent 类（会话、技能、流式）
+│   ├── query.ts              # runQueryLoop（核心循环）
+│   ├── llm.ts                # LLM 客户端（callLLM + callLLMStream）
+│   ├── tools/
+│   │   ├── readFile.ts       # read_file
+│   │   ├── writeFile.ts      # write_file
+│   │   ├── editFile.ts       # edit_file
+│   │   ├── listDir.ts        # list_dir
+│   │   ├── glob.ts           # glob（文件模式匹配）
+│   │   ├── grep.ts           # grep（内容搜索）
+│   │   ├── bash.ts           # bash（命令执行）
+│   │   ├── searchMemory.ts   # search_memory
+│   │   └── index.ts          # ALL_TOOLS 注册
+│   ├── permissions.ts        # allowAll / restrictToMemoryDir
+│   ├── policy/               # P0 策略引擎（allow/deny/confirm）
+│   ├── capabilities/         # 能力提供器（本地 + MCP）
+│   ├── mcp/                  # MCP 客户端 / 管理器 / 配置
+│   ├── skills/               # Skills 加载 / 解析 / 提示注入
+│   ├── extractMemories.ts    # 后台记忆抽取（节流、互斥）
+│   ├── forkedAgent.ts        # Fork 子 Agent
+│   ├── systemPrompt.ts       # 系统提示词构建
+│   ├── memory/               # 内置记忆系统（扫描/索引/检索/存储）
+│   ├── runtime/              # 运行时（会话、审批、清理器）
+│   ├── observability/
+│   │   ├── logger.ts         # 统一 Logger 接口 + 控制台/Pino/Winston 适配器
+│   │   └── panic.ts          # 全局异常捕获与优雅退出
+│   ├── auth/apiKey.ts        # Bearer Token 认证
+│   ├── server/app.ts         # HTTP(S) Server（TLS/CORS/SSE）
+│   ├── serverCli.ts          # Server 入口
+│   ├── cli.ts                # CLI 入口（REPL / Scripted）
+│   ├── scripted.ts           # 离线演示（无需 API Key）
+│   ├── memoryCli.ts          # 记忆系统 CLI
+│   └── index.ts              # 公共 API 导出
+├── tests/                    # 测试文件
+├── memory/                   # 示例记忆目录
+├── package.json
+└── tsconfig.json
 ```
 
 ---
 
-## 为什么它看起来像 Claude Code？
+## 核心能力的生产就绪度
 
-`runQueryLoop` 的骨架与主项目 `src/query.ts` 基本一致，只是做了精简：
+| 能力 | 状态 | 说明 |
+|------|------|------|
+| Agent 查询循环 | ✅ 完整 | tool_use ↔ tool_result 循环 + stop hook + 审批中断 |
+| 8 个内置工具 | ✅ 完整 | read/write/edit/list/glob/grep/bash/search_memory |
+| MCP 集成 | ✅ 完整 | JSON-RPC 2.0 + 子进程 stdio + 多服务器 |
+| Skills 系统 | ✅ 完整 | SKILL.md 发现 + @mention + 工具白名单 |
+| 权限策略引擎 | ✅ 完整 | allow/deny/confirm 三态 + 命令分类器 |
+| 记忆系统 | ✅ 完整 | 扫描→索引→存储→检索（LLM+关键词双模式） |
+| 流式响应 | ✅ 完整 | SSE 实时推送 + Token 用量追踪 |
+| 统一日志接口 | ✅ 完整 | Logger 抽象 + Pino/Winston 适配器 |
+| HTTPS/TLS | ✅ 完整 | 证书配置自动切换 |
+| CORS | ✅ 完整 | 配置驱动 |
+| 全局异常捕获 | ✅ 完整 | uncaughtException + unhandledRejection |
+| 审批机制 | ✅ 完整 | create/approve/reject/expire 状态机 |
+| 会话持久化 | ⚠️ 内存态 | 进程重启丢失（Plan: Phase 1 引入 SQLite） |
+| Token 统计 | ✅ 流式可见 | 非流式暂无（Plan: Phase 2 解析 usage 字段） |
+| 上下文压缩 | ❌ 未实现 | 仅靠消息数量限制（Plan: Phase 2 滑动窗口+摘要） |
+
+---
+
+## 配置
+
+所有配置通过环境变量控制：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `KIMI_API_KEY` | — | REPL/P0 服务必填 |
+| `KIMI_MODEL` | `moonshot-v1-8k` | 需支持 tool-calling |
+| `KIMI_BASE_URL` | `https://api.moonshot.cn/v1` | OpenAI 兼容接口 |
+| `KIMI_TIMEOUT_MS` | `30000` | 单次 LLM 调用超时 |
+| `MEMORY_DIR` | `./memory` | 持久化记忆目录 |
+| `DEBUG` | — | 设为 `1` 打印 LLM payload 与拒绝日志 |
+| **P0 Server** | | |
+| `PORT` | `8787` | HTTP 服务端口 |
+| `P0_API_KEYS` | — | JSON 数组，Bearer Token 身份映射 |
+| `P0_SESSION_TTL_MS` | `1800000` | 会话过期时间 |
+| `P0_MAX_SESSIONS` | `1000` | 最大并发会话数 |
+| `P0_MAX_MESSAGES` | `200` | 每会话最大消息数 |
+| `P0_MAX_SESSION_CHARS` | `1000000` | 每会话最大字符数 |
+| `REQUEST_TIMEOUT_MS` | `120000` | HTTP 请求超时 |
+| `HEADERS_TIMEOUT_MS` | `60000` | HTTP Headers 超时 |
+| **TLS/HTTPS** | | |
+| `TLS_CERT` / `TLS_CERT_PATH` | — | PEM 证书 |
+| `TLS_KEY` / `TLS_KEY_PATH` | — | PEM 私钥 |
+| `TLS_CA` / `TLS_CA_PATH` | — | CA 证书链（可选） |
+| `TLS_REQUEST_CERT` | `false` | 是否要求客户端证书 |
+| `CORS_ORIGIN` | — | 允许跨域的来源 |
+| **MCP** | | |
+| `MCP_SERVERS` | — | JSON 数组，直接配置 MCP 服务器 |
+| `MCP_SERVERS_FILE` | — | 包含 MCP 数组的 JSON 文件路径 |
+| `MCP_ENABLED` | auto | 强制开启/关闭（`true/false`） |
+| `MCP_ALLOWED_TOOLS` | — | 允许的 MCP 工具，逗号分隔 |
+| **Skills** | | |
+| `SKILL_ROOTS` | — | Skill 根目录（系统分隔符分隔） |
+| `SKILLS` | — | 默认激活的 Skill ID，逗号分隔 |
+| `SKILL_STRICT_ALLOWLIST` | `false` | 启用时激活 Skill 收敛工具集 |
+
+---
+
+## 编程式 API
+
+```typescript
+import { Agent } from '@quick-coding-agent/agent-tool-call'
+
+// 创建 Agent
+const agent = new Agent({
+  cwd: process.cwd(),
+  memoryDir: '/abs/path/to/memory',
+  onMemoriesSaved: paths => console.log('extractor wrote:', paths),
+})
+
+// 普通对话
+const reply = await agent.chat('Who am I?')
+console.log(reply)
+
+// 流式对话
+for await (const chunk of agent.streamChat('Write a poem')) {
+  if (chunk.type === 'text_delta') process.stdout.write(chunk.text)
+}
+console.log('Tokens:', agent.lastUsage)
+
+// 等待后台记忆抽取完成
+await agent.drain(10_000)
+```
+
+### 日志系统接入
+
+```typescript
+import { createConsoleLogger, loggerFromPino, loggerFromWinston } from '@quick-coding-agent/agent-tool-call'
+
+// 内置控制台 Logger
+const logger = createConsoleLogger({ service: 'my-app' })
+logger.info('server_started', { port: 3000 })
+
+// 接入 pino
+import pino from 'pino'
+const pinoLogger = loggerFromPino(pino({ level: 'info' }))
+
+// 接入 winston
+import winston from 'winston'
+const wLogger = loggerFromWinston(winston.createLogger({ transports: [...] }))
+
+// 创建子 Logger（自动携带上下文）
+const reqLog = logger.child({ request_id: 'req-123' })
+reqLog.info('request_started') // 自动含 request_id
+```
+
+### Forked Agent
+
+```typescript
+import { runForkedAgent, ALL_TOOLS, restrictToMemoryDirPermission } from '@quick-coding-agent/agent-tool-call'
+
+await runForkedAgent({
+  parentSystemPrompt: '…',
+  parentMessages: parentHistory,
+  tools: ALL_TOOLS,
+  canUseTool: restrictToMemoryDirPermission(memoryDir),
+  parentContext: ctx,
+  prompt: 'Summarise the last conversation into a project memory.',
+  maxTurns: 5,
+  forkLabel: 'extract',
+})
+```
+
+---
+
+## 脚本演示
+
+`pnpm demo` 使用 `CannedModel` 跑 3 个离线场景（无需 API Key）：
+
+```text
+Scenario 1: agent 搜索记忆→回答→后台抽取器触发
+Scenario 2: forked extractor 写入 memoryDir 外 → DENY
+Scenario 3: 无 API Key 的优雅错误路径
+```
+
+---
+
+## 为什么它像 Claude Code？
+
+`runQueryLoop` 骨架与主项目 `src/query.ts` 一致：
 
 ```ts
 while (turn++ < maxTurns) {
@@ -188,7 +334,7 @@ while (turn++ < maxTurns) {
   history.push(assistant)
 
   const toolUses = getToolUses(assistant)
-  if (toolUses.length === 0) break        // model is done
+  if (toolUses.length === 0) break
 
   const results = await Promise.all(
     toolUses.map(tu => executeOne(tu, tools, canUseTool, ctx))
@@ -200,7 +346,7 @@ if (!isForkedAgent) for (const hook of stopHooks) await hook(...)
 return { messages: history, finalMessage: history.at(-1)! }
 ```
 
-权限校验发生在 `tool.call` **之前**：
+权限在工具执行前校验：
 
 ```ts
 const decision = await canUseTool(tool, parsedInput, ctx)
@@ -210,151 +356,30 @@ if (decision.behavior === 'deny') {
 return tool.call(decision.updatedInput, ctx)
 ```
 
-抽取器本质上就是一次子 Agent 调用：循环与工具一致，但 prompt 和 `canUseTool` 更严格（写入限制在 `memoryDir`）：
-
-```ts
-runForkedAgent({
-  parentSystemPrompt,
-  parentMessages: messages,    // share the prompt cache
-  prompt: extractMemoriesPrompt,
-  tools: ALL_TOOLS,
-  canUseTool: restrictToMemoryDirPermission(memoryDir),
-  forkLabel: 'extract_memories',
-})
-```
-
 ---
 
-## 项目结构
+## 限制
 
-```text
-agent-tool-call/
-├── src/
-│   ├── types.ts           # Message / ContentBlock / Tool / ToolUseContext
-│   ├── tools/
-│   │   ├── readFile.ts    # read_file       (read-only)
-│   │   ├── writeFile.ts   # write_file      (write — gated)
-│   │   ├── listDir.ts     # list_dir        (read-only)
-│   │   ├── searchMemory.ts# search_memory   (proxies findRelevantMemories)
-│   │   └── index.ts       # ALL_TOOLS, findToolByName
-│   ├── permissions.ts     # allowAllPermission, restrictToMemoryDirPermission
-│   ├── llm.ts             # Moonshot/Kimi tool-calling client + JSON-schema
-│   ├── query.ts           # runQueryLoop (the heart of the demo)
-│   ├── forkedAgent.ts     # runForkedAgent + hasMemoryWritesSince
-│   ├── extractMemories.ts # initExtractMemories: throttle + mutex + drain
-│   ├── systemPrompt.ts    # buildSystemPrompt (injects buildMemoryPrompt)
-│   ├── agent.ts           # high-level Agent class with stop-hook wiring
-│   ├── scripted.ts        # offline 3-scenario demo via CannedModel
-│   ├── cli.ts             # CLI: --scripted | --repl
-│   ├── memoryCli.ts       # memory demo CLI
-│   └── memory/            # built-in memory system modules
-├── memory/                # sample persistent memory directory
-├── package.json
-├── tsconfig.json
-└── .env.example
-```
+以下能力暂未实现（按 Plan 排序）：
 
----
+| 能力 | 状态 | 计划 |
+|------|------|------|
+| 会话/审批持久化 | 内存态 | Phase 1：引入 SQLite |
+| Token 统计（非流式） | — | Phase 2：解析 usage 字段 |
+| 上下文压缩 | — | Phase 2：滑动窗口 + 摘要 |
+| LLM 调用重试 | — | Phase 2：指数退避 |
+| 监控/metrics | — | Phase 2：Prometheus |
+| JWT 认证 | 静态 Bearer | Phase 3 |
+| MCP 自动重连 | — | Phase 3 |
+| 插件系统 | — | Phase 3 |
 
-## 配置
-
-所有配置都通过环境变量控制（见 `.env.example`）：
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `KIMI_API_KEY` | （无） | `npm run repl` 必填 |
-| `KIMI_MODEL` | `moonshot-v1-8k` | 需支持 tool-calling |
-| `KIMI_BASE_URL` | `https://api.moonshot.cn/v1` | OpenAI 兼容接口 |
-| `KIMI_TIMEOUT_MS` | `30000` | 单次 LLM 调用超时 |
-| `MEMORY_DIR` | `./memory` | 持久化记忆目录 |
-| `DEBUG` | （未设置） | 设为 `1` 打印 LLM payload 与工具拒绝日志 |
-| `MCP_SERVERS` | （未设置） | MCP server 配置 JSON 数组（优先于文件） |
-| `MCP_SERVERS_FILE` | （未设置） | 包含 MCP server 数组的 JSON 文件路径 |
-| `MCP_ENABLED` | auto | 强制开启/关闭 MCP（`true/false`） |
-| `SKILL_ROOTS` | （未设置） | Skill 根目录（按系统路径分隔符分隔） |
-| `SKILLS` | （未设置） | 默认激活的 skill id，逗号分隔 |
-| `SKILL_STRICT_ALLOWLIST` | `false` | 为 `true` 时，激活 skill 可收敛工具集 |
-
-### MCP server 配置格式
-
-`MCP_SERVERS` / `MCP_SERVERS_FILE` 必须是 JSON 数组：
-
-```json
-[
-  {
-    "name": "filesystem",
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/abs/project/path"],
-    "startupTimeoutMs": 15000,
-    "toolTimeoutMs": 30000
-  }
-]
-```
-
-MCP 工具会暴露为：
-
-`mcp__<serverName>__<toolName>`
-
-例如：`mcp__filesystem__read_file`。
-
----
-
-## 编程式 API（用于嵌入）
-
-```typescript
-import { Agent } from './src/agent.js'
-
-const agent = new Agent({
-  cwd: process.cwd(),
-  memoryDir: '/abs/path/to/memory',
-  onMemoriesSaved: paths => console.log('extractor wrote:', paths),
-})
-
-const reply = await agent.chat('Who am I and what role do I prefer?')
-console.log(reply)
-
-await agent.drain(10_000)   // wait for background extraction before exit
-```
-
-如果你想手动执行一次 forked agent：
-
-```typescript
-import { runForkedAgent } from './src/forkedAgent.js'
-import { ALL_TOOLS } from './src/tools/index.js'
-import { restrictToMemoryDirPermission } from './src/permissions.js'
-
-await runForkedAgent({
-  parentSystemPrompt: '…',
-  parentMessages: parentHistory,
-  tools: ALL_TOOLS,
-  canUseTool: restrictToMemoryDirPermission(memoryDir),
-  parentContext: ctx,
-  prompt: 'Summarise the last conversation into a single project_*.md memory.',
-  maxTurns: 5,
-  forkLabel: 'manual_extract',
-})
-```
-
----
-
-## 限制（刻意保留）
-
-这是一个教学演示，不是生产运行时的完整替代。以下能力被有意省略：
-
-- **流式响应**：当前按 turn 等待完整 LLM 返回。
-- **成本/Token 追踪**：只有基础日志。
-- **MCP servers、sub-skills、plug-ins、hooks file 的完整体系**：完整接入会让 demo 体量失控。
-- **上下文压缩 / 长窗口管理**：只面向短会话。
-- **AutoDream 汇总**：见主项目 `src/services/autoDream/`，模式相同但 prompt 不同。
-- **落盘消息日志**：会话历史当前仅驻留进程内存。
-- **P0 server 无持久化**：进程重启后 session 和 approval 会丢失。
-- **审批不会自动恢复执行现场**：批准后需要由调用方重新发起请求。
+详见项目根目录的 `MCP_SKILLS_PLAN.md`。
 
 ---
 
 ## 相关文档
 
-- `src/memory/*`：本包内置的持久化记忆子系统实现。
-- 主项目 `src/query.ts`：本演示所对齐的生产查询循环。
-- 主项目 `src/services/extractMemories/`：本演示 `extractMemories.ts` 的原型来源。
-- `IMPLEMENTATION.md`：逐模块深度讲解。
+- `IMPLEMENTATION.md`：逐模块深度讲解
+- `src/memory/`：内置持久化记忆子系统
+- `MCP_SKILLS_PLAN.md`：MCP & Skills 接入方案
+- 根目录 `packages/memory-system/`：独立记忆系统包

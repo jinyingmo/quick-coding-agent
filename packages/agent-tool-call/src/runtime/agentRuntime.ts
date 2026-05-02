@@ -6,7 +6,13 @@ import type { ApprovalRegistry } from './approvalRegistry.js'
 import type { SessionRegistry } from './sessionRegistry.js'
 import type { PendingApproval } from './approvalRegistry.js'
 import type { Message } from '../types.js'
+import type { LLMStreamChunk } from '../llm.js'
 import { createSessionPolicyCanUseTool } from '../policy/engine.js'
+
+export type StreamChunk = {
+  type: string
+  payload: Record<string, unknown>
+}
 
 export type AgentRuntime = {
   createSession(input: {
@@ -33,6 +39,11 @@ export type AgentRuntime = {
     | { status: 'completed'; reply: string }
     | { status: 'confirm_required'; approvalId: string; reason: string }
   >
+  /** 流式发送消息，返回 AsyncGenerator 逐步推送内容 */
+  sendMessageStream(input: {
+    sessionId: string
+    text: string
+  }): AsyncGenerator<StreamChunk, void>
   extractMemories(sessionId: string): Promise<{ status: 'completed'; savedCount: number }>
   getApproval(approvalId: string): PendingApproval | undefined
   approve(input: { approvalId: string; reviewerId: string }): { status: 'approved' | 'not_found' | 'expired' | 'already_resolved' }
@@ -155,6 +166,20 @@ export function createAgentRuntime(params: {
           .filter(block => block.type === 'text')
           .map(block => block.text)
           .join('\n') ?? 'Request ended without a final text response.',
+      }
+    },
+
+    // 流式发送消息：逐步 yield LLM 增量块
+    async *sendMessageStream(input) {
+      const session = params.sessionRegistry.require(input.sessionId)
+      const agent = getAgent(input.sessionId)
+
+      try {
+        for await (const chunk of agent.streamChat(input.text)) {
+          yield { type: chunk.type, payload: chunk as unknown as Record<string, unknown> }
+        }
+      } finally {
+        params.sessionRegistry.replaceMessages(input.sessionId, agent.historySnapshot())
       }
     },
 

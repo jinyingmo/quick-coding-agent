@@ -14,7 +14,6 @@ export type {
   UserMessage,
   AssistantMessage,
   ToolApprovalRequest,
-  LogLevel,
 } from './types.js'
 
 export {
@@ -47,11 +46,17 @@ export { createSessionRegistry } from './runtime/sessionRegistry.js'
 export { createApprovalRegistry } from './runtime/approvalRegistry.js'
 export { startRuntimeSweeper } from './runtime/sweeper.js'
 export { createAgentRuntime } from './runtime/agentRuntime.js'
-export { createStructuredLogger } from './observability/logger.js'
+export { createStructuredLogger, createConsoleLogger, createToolLogger, loggerFromPino, loggerFromWinston, loggerFromGeneric } from './observability/logger.js'
+export type { Logger, LogLevel, ToolLogFn } from './observability/logger.js'
+export { installPanicHandlers } from './observability/panic.js'
+export type { PanicHandlerConfig } from './observability/panic.js'
+export { callLLM, callLLMStream, loadLLMConfig, isLLMAvailable, zodToJsonSchema, buildOpenAIMessages } from './llm.js'
+export type { LLMConfig, LLMCallOptions, LLMStreamChunk, LLMStreamResult, TokenUsage } from './llm.js'
 export { loadApiKeyIdentitiesFromEnv, findIdentityByBearerToken } from './auth/apiKey.js'
 export { createMainPolicyEngine, createPolicyCanUseTool, createSessionPolicyCanUseTool } from './policy/engine.js'
 export { createDefaultMainPolicyConfig } from './policy/defaults.js'
 export { classifyCommand } from './policy/commandClassifier.js'
 export type { MainPolicyConfig } from './policy/defaults.js'
 export type { PolicyEngine, PolicyEngineDecision, SessionIdentity } from './policy/types.js'
-export { createP0Server } from './server/app.js'
+export { createP0Server, createP0RequestHandler, isTLSConfigured } from './server/app.js'
+export type { TLSConfig, P0ServerConfig } from './server/app.js'

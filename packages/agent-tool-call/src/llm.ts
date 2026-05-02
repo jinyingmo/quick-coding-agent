@@ -308,6 +308,264 @@ export async function callLLM(opts: LLMCallOptions): Promise<AssistantMessage> {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Streaming API
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Token 用量统计 */
+export type TokenUsage = {
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+}
+
+/** 流式响应增量块 */
+export type LLMStreamChunk =
+  | { type: 'text_delta'; text: string }
+  | { type: 'tool_call_delta'; id: string; name?: string; arguments: string }
+  | { type: 'done'; finishReason: string; usage?: TokenUsage }
+
+/** 流式响应完整结果 */
+export type LLMStreamResult = {
+  assistant: AssistantMessage
+  usage?: TokenUsage
+}
+
+type SSEEvent = {
+  data: string
+}
+
+/**
+ * 解析 SSE (Server-Sent Events) 流，逐行 yield 每个事件。
+ */
+async function* parseSSEStream(response: Response): AsyncGenerator<SSEEvent> {
+  if (!response.body) {
+    throw new Error('Response body is empty, streaming requires a readable body')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        if (trimmed.startsWith('data: ')) {
+          const data = trimmed.slice(6)
+          if (data === '[DONE]') return
+          yield { data }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+/**
+ * 流式调用 LLM，通过 AsyncGenerator 逐步返回文本增量和工具调用分块。
+ *
+ * 与 `callLLM()` 不同，此函数不会等待完整响应，而是通过 yield 逐步
+ * 推送内容，适合与 SSE/WebSocket 配合实现实时输出。
+ *
+ * @example
+ *   for await (const chunk of callLLMStream(opts)) {
+ *     if (chunk.type === 'text_delta') console.write(chunk.text)
+ *   }
+ */
+export async function* callLLMStream(opts: LLMCallOptions): AsyncGenerator<LLMStreamChunk, LLMStreamResult> {
+  const cfg = opts.config ?? loadLLMConfig()
+  if (!cfg.apiKey) {
+    throw new Error(
+      'KIMI_API_KEY is not set — start the demo in --scripted mode or configure your .env',
+    )
+  }
+
+  const tools = opts.tools.map(t => ({
+    type: 'function' as const,
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.jsonSchema ?? zodToJsonSchema(t.inputSchema),
+    },
+  }))
+
+  const body = {
+    model: cfg.model,
+    messages: buildOpenAIMessages(opts.systemPrompt, opts.history),
+    tools,
+    tool_choice: 'auto' as const,
+    temperature: 0.2,
+    stream: true,
+    stream_options: { include_usage: true },
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), cfg.timeoutMs)
+  if (opts.signal) {
+    opts.signal.addEventListener('abort', () => controller.abort())
+  }
+
+  let response: Response
+  try {
+    response = await fetch(`${cfg.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeout)
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '<no body>')
+    throw new Error(`Kimi API ${response.status}: ${text}`)
+  }
+
+  // 拼接增量内容
+  let fullText = ''
+  const toolCallsIndex = new Map<number, { id: string; name: string; arguments: string }>()
+
+  let usage: TokenUsage | undefined
+
+  try {
+    for await (const event of parseSSEStream(response)) {
+      const json = JSON.parse(event.data) as {
+        choices?: Array<{
+          delta?: {
+            content?: string | null
+            tool_calls?: Array<{
+              index?: number
+              id?: string
+              function?: { name?: string; arguments?: string }
+            }>
+          }
+          finish_reason?: string | null
+        }>
+        usage?: {
+          prompt_tokens: number
+          completion_tokens: number
+          total_tokens: number
+        }
+      }
+
+      // 处理 usage 信息（某些 API 在最后帧返回）
+      if (json.usage) {
+        usage = {
+          promptTokens: json.usage.prompt_tokens,
+          completionTokens: json.usage.completion_tokens,
+          totalTokens: json.usage.total_tokens,
+        }
+        yield { type: 'done', finishReason: 'stop', usage }
+        continue
+      }
+
+      const choice = json.choices?.[0]
+      if (!choice) continue
+
+      const delta = choice.delta
+      if (!delta) continue
+
+      // 文本增量
+      if (delta.content) {
+        fullText += delta.content
+        yield { type: 'text_delta', text: delta.content }
+      }
+
+      // 工具调用增量
+      if (delta.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index ?? 0
+          if (tc.id) {
+            toolCallsIndex.set(idx, {
+              id: tc.id,
+              name: tc.function?.name ?? '',
+              arguments: tc.function?.arguments ?? '',
+            })
+          } else if (tc.function?.arguments) {
+            const existing = toolCallsIndex.get(idx)
+            if (existing) {
+              existing.arguments += tc.function.arguments
+            } else {
+              toolCallsIndex.set(idx, {
+                id: '',
+                name: tc.function?.name ?? '',
+                arguments: tc.function.arguments,
+              })
+            }
+          }
+
+          const current = toolCallsIndex.get(idx)
+          if (current) {
+            yield {
+              type: 'tool_call_delta',
+              id: current.id,
+              name: current.name || undefined,
+              arguments: current.arguments,
+            }
+          }
+        }
+      }
+
+      // 结束标记
+      if (choice.finish_reason) {
+        yield { type: 'done', finishReason: choice.finish_reason }
+      }
+    }
+  } finally {
+    // 确保 response body 被消费完毕
+  }
+
+  // 构建最终的 AssistantMessage
+  const blocks: ContentBlock[] = []
+  if (fullText) {
+    blocks.push({ type: 'text', text: fullText })
+  }
+
+  const sortedToolCalls = [...toolCallsIndex.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, v]) => v)
+
+  for (const tc of sortedToolCalls) {
+    if (!tc.id) continue
+    let parsed: Record<string, unknown> = {}
+    try {
+      parsed = JSON.parse(tc.arguments || '{}') as Record<string, unknown>
+    } catch {
+      parsed = { __raw: tc.arguments }
+    }
+    blocks.push({
+      type: 'tool_use',
+      id: tc.id,
+      name: tc.name,
+      input: parsed,
+    })
+  }
+
+  if (blocks.length === 0) {
+    blocks.push({ type: 'text', text: '' })
+  }
+
+  const stopReason: AssistantMessage['stopReason'] =
+    sortedToolCalls.length > 0 ? 'tool_use' : 'end_turn'
+  const assistant = createAssistantMessage(blocks, stopReason)
+
+  return { assistant, usage }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Re-exports for convenience
 // ────────────────────────────────────────────────────────────────────────────
 
