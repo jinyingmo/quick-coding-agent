@@ -1,3 +1,5 @@
+/** 中文说明：核心 agent 模块。 */
+
 /**
  * Background memory extraction.
  *
@@ -66,6 +68,7 @@ Rules:
 - DO NOT save code patterns, file paths, git history, or anything derivable from the current project state.
 - DO NOT save in-progress task details or temporary conversation context.`
 
+// 构建发送给记忆提取子 agent 的提示词
 function buildExtractPrompt(
   newMessageCount: number,
   manifest: string,
@@ -117,6 +120,7 @@ export type ExtractMemoriesConfig = {
  * Build a fresh controller with its own closure state. Tests in the parent
  * project re-init in `beforeEach` for the same reason.
  */
+/** 初始化记忆提取控制器：创建闭包状态并返回 run/drain/isInProgress 方法。 */
 export function initExtractMemories(
   cfg: ExtractMemoriesConfig = {},
 ): ExtractMemoriesController {
@@ -130,6 +134,7 @@ export function initExtractMemories(
   let pendingContext: { messages: Message[]; ctx: ToolUseContext } | undefined
   const inFlight = new Set<Promise<void>>()
 
+  // 计算自上次提取游标以来模型可见的新消息数量
   function countModelVisibleSince(messages: Message[], uuid: string | undefined): number {
     if (uuid === undefined) return messages.length
     let started = false
@@ -144,6 +149,7 @@ export function initExtractMemories(
     return started ? n : messages.length
   }
 
+  // 执行一次记忆提取：检查互斥、节流、扫描记忆文件并运行提取子 agent
   async function runExtraction(
     messages: Message[],
     ctx: ToolUseContext,
@@ -235,6 +241,7 @@ export function initExtractMemories(
     }
   }
 
+  // 外部调用入口：跳过子 agent 调用，如果正在运行则合并等待
   async function run(messages: Message[], ctx: ToolUseContext): Promise<void> {
     if (ctx.agentId) {
       ctx.log('[extractMemories] skip — running inside a subagent', 'debug')
@@ -256,6 +263,7 @@ export function initExtractMemories(
     }
   }
 
+  // 等待所有正在进行的提取完成（带软超时）
   async function drain(timeoutMs = 60_000): Promise<void> {
     if (inFlight.size === 0) return
     await Promise.race([

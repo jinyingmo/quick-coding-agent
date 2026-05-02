@@ -1,3 +1,5 @@
+/** 中文说明：核心 agent 模块。 */
+
 import { randomUUID } from 'crypto'
 import type {
   AssistantMessage,
@@ -20,6 +22,7 @@ export type ForkedAgentParams = {
   forkLabel: string
 }
 
+/** 运行一个分支子 agent：继承父 agent 上下文，以独立 agentId 运行查询循环。 */
 export async function runForkedAgent(params: ForkedAgentParams): Promise<QueryResult> {
   const { parentSystemPrompt, parentMessages, tools, canUseTool, parentContext } = params
   const agentId = `${params.forkLabel}-${randomUUID().slice(0, 8)}`
@@ -48,6 +51,7 @@ export async function runForkedAgent(params: ForkedAgentParams): Promise<QueryRe
   })
 }
 
+/** 从消息列表中提取所有 write_file 调用写入的文件路径。 */
 export function extractWrittenPaths(messages: Message[]): string[] {
   const paths: string[] = []
   for (const m of messages) {
@@ -65,6 +69,7 @@ export function extractWrittenPaths(messages: Message[]): string[] {
   return [...new Set(paths)]
 }
 
+/** 检查自指定 UUID 以来的消息中是否包含对记忆目录的写入操作。 */
 export function hasMemoryWritesSince(
   messages: Message[],
   sinceUuid: string | undefined,

@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * Kimi (Moonshot AI) API client for memory relevance selection.
  *
@@ -36,12 +38,14 @@ Rules:
 `
 
 /**
+ * 调用 Kimi API 为查询选择最相关的记忆文件，失败时返回 null 以优雅降级。
+ *
  * Call Kimi API to select relevant memories for a query.
  *
- * @param query The user's query
- * @param memories List of available memory headers
- * @param options Config and optional signal
- * @returns Selected filenames, or null if the call failed
+ * @param query 用户查询文本
+ * @param memories 可用记忆文件头信息列表
+ * @param options 配置与可选 AbortSignal
+ * @returns 选中的文件名列表，调用失败返回 null
  */
 export async function callKimiSelectMemories(
   query: string,

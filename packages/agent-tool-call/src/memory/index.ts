@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * Memory System — public API exports.
  *

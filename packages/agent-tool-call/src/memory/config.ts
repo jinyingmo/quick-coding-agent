@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * Configuration management for the memory system.
  *
@@ -19,6 +21,8 @@ export interface MemoryConfig {
 }
 
 /**
+ * 从环境变量加载记忆系统配置，支持通过 overrides 覆盖。
+ *
  * Load configuration from environment variables.
  */
 export function loadConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
@@ -33,6 +37,8 @@ export function loadConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
 }
 
 /**
+ * 检查 Kimi API 是否已配置且可用（有 API Key）。
+ *
  * Check if Kimi API is configured and available.
  */
 export function isKimiAvailable(config: MemoryConfig): boolean {

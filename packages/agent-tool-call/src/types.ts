@@ -1,23 +1,13 @@
+/** 中文说明：核心 agent 模块。 */
+
 /**
  * Core types for the agent tool-call demo.
- *
- * Modeled after the Anthropic SDK message shape used in the parent project
- * (`src/types/message.ts`, `src/Tool.ts`), trimmed to the essentials needed
- * to demonstrate the loop:
- *
- *   - Messages are either `user` or `assistant`.
- *   - Each message carries an array of content blocks: text, tool_use, tool_result.
- *   - A turn ends when the assistant produces a final response with **no**
- *     tool_use blocks (the same condition that triggers stop hooks in the
- *     real codebase, see `handleStopHooks` in `src/query/stopHooks.ts`).
  */
 
 import { randomUUID } from 'crypto'
 import type { z } from 'zod'
 
-// ────────────────────────────────────────────────────────────────────────────
-// Content blocks
-// ────────────────────────────────────────────────────────────────────────────
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
 export type TextBlock = {
   type: 'text'
@@ -26,7 +16,6 @@ export type TextBlock = {
 
 export type ToolUseBlock = {
   type: 'tool_use'
-  /** Stable id assigned by the LLM (or by us in scripted mode). */
   id: string
   name: string
   input: Record<string, unknown>
@@ -41,10 +30,6 @@ export type ToolResultBlock = {
 
 export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock
 
-// ────────────────────────────────────────────────────────────────────────────
-// Messages
-// ────────────────────────────────────────────────────────────────────────────
-
 export type UserMessage = {
   type: 'user'
   uuid: string
@@ -55,12 +40,12 @@ export type AssistantMessage = {
   type: 'assistant'
   uuid: string
   content: ContentBlock[]
-  /** Set on the message that closes the loop (no further tool_use). */
   stopReason?: 'end_turn' | 'tool_use' | 'max_turns' | 'error'
 }
 
 export type Message = UserMessage | AssistantMessage
 
+/** 创建用户消息：接受文本字符串或 ContentBlock 数组。 */
 export function createUserMessage(content: ContentBlock[] | string): UserMessage {
   return {
     type: 'user',
@@ -69,6 +54,7 @@ export function createUserMessage(content: ContentBlock[] | string): UserMessage
   }
 }
 
+/** 创建助手消息：包含内容块和可选的停止原因。 */
 export function createAssistantMessage(
   content: ContentBlock[],
   stopReason?: AssistantMessage['stopReason'],
@@ -81,64 +67,58 @@ export function createAssistantMessage(
   }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Tool interface (mirrors `src/Tool.ts` in the parent project, trimmed)
-// ────────────────────────────────────────────────────────────────────────────
-
 export type ToolUseContext = {
-  /** Working directory the agent was launched in. */
   cwd: string
-  /** Memory directory currently in use (passed down so tools can self-validate). */
   memoryDir: string
-  /** Set when this context belongs to a forked subagent (e.g. the extractor). */
   agentId?: string
-  /** Best-effort logger, plumbed everywhere so tools and hooks can trace. */
-  log: (msg: string, level?: 'debug' | 'info' | 'warn' | 'error') => void
-  /** Abort signal passed through to fetch / fs operations. */
+  sessionId?: string
+  userId?: string
+  workspaceId?: string
+  requestId?: string
+  log: (msg: string, level?: LogLevel) => void
   signal: AbortSignal
 }
 
-/**
- * Tool definition. `Input` is a Zod schema; `call` receives parsed input.
- *
- * The triple (`name`, `description`, `inputSchema`) is what gets shipped to
- * the LLM as a tool definition. `isReadOnly` mirrors the field with the same
- * name in the parent project — the extractor's CanUseToolFn uses it to gate
- * Bash-style commands.
- */
 export type Tool<Input extends z.ZodType = z.ZodType, Output = unknown> = {
   readonly name: string
   readonly description: string
-  /** Capability source (built-in local tool vs MCP-exposed tool). */
   readonly source?: 'local' | 'mcp'
-  /** Optional metadata for observability / diagnostics. */
   readonly metadata?: {
     server?: string
     originalName?: string
     title?: string
   }
   readonly inputSchema: Input
-  /** Optional pre-baked JSON schema (used by MCP-adapted tools). */
   readonly jsonSchema?: Record<string, unknown>
   isReadOnly(input: z.infer<Input>): boolean
   call(input: z.infer<Input>, context: ToolUseContext): Promise<ToolResult<Output>>
 }
 
 export type ToolResult<Output = unknown> = {
-  /** Raw structured value returned by the tool. */
   data: Output
-  /** Human-readable string sent back to the model as the tool_result block content. */
   display: string
   isError?: boolean
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Permissions
-// ────────────────────────────────────────────────────────────────────────────
+export type ToolApprovalRequest = {
+  id: string
+  sessionId: string
+  userId: string
+  workspaceId: string
+  actionType: 'bash' | 'write_file' | 'edit_file' | 'mcp'
+  toolName: string
+  riskLevel: 'low' | 'medium' | 'high' | 'critical'
+  summary: string
+  reason: string
+  input: Record<string, unknown>
+  createdAt: number
+  expiresAt: number
+}
 
 export type PermissionResult =
   | { behavior: 'allow'; updatedInput: Record<string, unknown> }
   | { behavior: 'deny'; message: string }
+  | { behavior: 'confirm'; message: string; approvalRequest: ToolApprovalRequest }
 
 export type CanUseToolFn = (
   tool: Tool,
@@ -146,14 +126,12 @@ export type CanUseToolFn = (
   context: ToolUseContext,
 ) => Promise<PermissionResult>
 
-// ────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ────────────────────────────────────────────────────────────────────────────
-
+/** 从助手消息中提取所有 tool_use 块。 */
 export function getToolUses(message: AssistantMessage): ToolUseBlock[] {
   return message.content.filter((b): b is ToolUseBlock => b.type === 'tool_use')
 }
 
+/** 从消息中提取所有文本块的拼接文本。 */
 export function getText(message: AssistantMessage | UserMessage): string {
   return message.content
     .filter((b): b is TextBlock => b.type === 'text')

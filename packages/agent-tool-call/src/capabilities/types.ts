@@ -1,3 +1,5 @@
+/** 中文说明：能力提供器模块。 */
+
 import type { Tool, ToolUseContext } from '../types.js'
 
 export type CapabilityProviderContext = {

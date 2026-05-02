@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * Build the memory behavioral instructions prompt.
  *
@@ -8,6 +10,7 @@
 import { MEMORY_TYPES } from './types.js'
 import { readEntrypoint } from './indexer.js'
 
+/** 构建记忆行为指令提示词，注入 MEMORY.md 索引内容 */
 export async function buildMemoryPrompt(memoryDir: string): Promise<string> {
   const entrypointContent = await readEntrypoint(memoryDir)
 
@@ -103,6 +106,7 @@ export async function buildMemoryPrompt(memoryDir: string): Promise<string> {
   return lines.join('\n')
 }
 
+// 根据记忆类型返回对应的英文描述文本
 function typeDescription(type: string): string {
   switch (type) {
     case 'user':

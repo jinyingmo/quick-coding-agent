@@ -1,3 +1,5 @@
+/** 中文说明：核心 agent 模块。 */
+
 /**
  * CLI demo for the memory system.
  *
@@ -43,14 +45,17 @@ const COLORS = {
   blue: '\x1b[34m',
 }
 
+// 为文本添加 ANSI 颜色
 function c(name: keyof typeof COLORS, text: string): string {
   return `${COLORS[name]}${text}${COLORS.reset}`
 }
 
+// 打印水平分隔线
 function hr(): void {
   console.log(c('dim', '─'.repeat(60)))
 }
 
+// 打印带分隔线的标题
 function heading(text: string): void {
   hr()
   console.log(c('bold', `  ${text}`))
@@ -58,6 +63,7 @@ function heading(text: string): void {
   console.log()
 }
 
+// 演示 1：构建记忆行为提示词
 async function demoBuildPrompt(): Promise<void> {
   heading('1. BUILD MEMORY BEHAVIORAL PROMPT')
   console.log(
@@ -78,6 +84,7 @@ async function demoBuildPrompt(): Promise<void> {
   )
 }
 
+// 演示 2：扫描记忆目录
 async function demoScan(): Promise<void> {
   heading('2. SCAN MEMORY DIRECTORY')
   console.log(
@@ -95,6 +102,7 @@ async function demoScan(): Promise<void> {
   console.log(formatMemoryManifest(memories))
 }
 
+// 演示 3：读取 MEMORY.md 索引文件
 async function demoEntrypoint(): Promise<void> {
   heading('3. MEMORY.md INDEX (with truncation check)')
 
@@ -108,6 +116,7 @@ async function demoEntrypoint(): Promise<void> {
   console.log(raw)
 }
 
+// 演示 4：查找相关记忆（支持 LLM 语义选择和本地关键词评分）
 async function demoRetrieve(useLLM: boolean): Promise<void> {
   heading('4. FIND RELEVANT MEMORIES')
 
@@ -161,6 +170,7 @@ async function demoRetrieve(useLLM: boolean): Promise<void> {
   }
 }
 
+// 演示 4b：对比 LLM 语义检索和本地关键词检索的结果
 async function demoCompareEngines(): Promise<void> {
   heading('4b. LLM vs LOCAL COMPARISON')
 
@@ -219,6 +229,7 @@ async function demoCompareEngines(): Promise<void> {
   )
 }
 
+// 演示 5：保存新记忆并查看更新后的清单
 async function demoSave(): Promise<void> {
   heading('5. SAVE A NEW MEMORY')
 
@@ -248,6 +259,7 @@ async function demoSave(): Promise<void> {
   console.log(formatMemoryManifest(memories.slice(0, 5)))
 }
 
+// 演示 6：检查记忆新鲜度和过期状态
 async function demoFreshness(): Promise<void> {
   heading('6. MEMORY FRESHNESS / STALENESS')
 
@@ -272,6 +284,7 @@ async function demoFreshness(): Promise<void> {
   }
 }
 
+// 演示 7：展示相关记忆的完整内容
 async function demoFullContent(useLLM: boolean): Promise<void> {
   heading('7. FULL CONTENT OF A RELEVANT MEMORY')
 
@@ -298,6 +311,7 @@ async function demoFullContent(useLLM: boolean): Promise<void> {
   console.log(formatRelevantMemories([m]))
 }
 
+// 清理演示过程中创建的临时记忆文件
 async function cleanupDemoMemory(): Promise<void> {
   try {
     await deleteMemory(MEMORY_DIR, 'project_api_migration.md')
@@ -306,6 +320,7 @@ async function cleanupDemoMemory(): Promise<void> {
   }
 }
 
+// 记忆系统 CLI 主入口：运行演示或输出记忆提示词
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const isDemo = args.includes('--demo')
@@ -384,6 +399,7 @@ async function main(): Promise<void> {
 
     process.stdout.write(c('cyan', 'query> '))
 
+    // 交互模式：监听标准输入，查询记忆并显示结果
     stdin.on('data', async (data: Buffer) => {
       const query = data.toString().trim()
       if (query === 'exit') {

@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * Memory type taxonomy — the four discrete types of memory.
  *
@@ -10,10 +12,12 @@ export const MEMORY_TYPES = ['user', 'feedback', 'project', 'reference'] as cons
 
 export type MemoryType = (typeof MEMORY_TYPES)[number]
 
+/** 判断原始值是否为合法的 MemoryType 类型 */
 export function isMemoryType(raw: unknown): raw is MemoryType {
   return typeof raw === 'string' && MEMORY_TYPES.includes(raw as MemoryType)
 }
 
+/** 解析原始值为 MemoryType，非法值返回 undefined */
 export function parseMemoryType(raw: unknown): MemoryType | undefined {
   if (typeof raw !== 'string') return undefined
   return MEMORY_TYPES.find((t) => t === raw)

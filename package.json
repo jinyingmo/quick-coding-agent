@@ -8,6 +8,7 @@
     "test": "pnpm -r test",
     "agent:demo": "pnpm --filter @quick-coding-agent/agent-tool-call demo",
     "agent:repl": "pnpm --filter @quick-coding-agent/agent-tool-call repl",
+    "agent:serve": "pnpm --filter @quick-coding-agent/agent-tool-call serve",
     "memory:demo": "pnpm --filter @quick-coding-agent/agent-tool-call memory:demo",
     "memory:demo:local": "pnpm --filter @quick-coding-agent/agent-tool-call memory:demo:local"
   },

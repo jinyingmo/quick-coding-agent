@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * Frontmatter parser for markdown memory files.
  *
@@ -10,6 +12,11 @@ import type { FrontmatterData, ParsedMarkdown } from './types.js'
 export const FRONTMATTER_REGEX = /^---\s*\n([\s\S]*?)---\s*\n?/
 
 /**
+ * 最小化 YAML 解析器，处理记忆 frontmatter 中使用的子集：
+ * - 每行一个键值对
+ * - 支持引号字符串和不带引号的字符串
+ * - 跳过空行和注释行
+ *
  * Minimal YAML parser that handles the subset used in memory frontmatter:
  * - key: value pairs (one per line)
  * - Supports quoted strings with " and '
@@ -45,6 +52,8 @@ function parseSimpleYaml(text: string): Record<string, unknown> {
 }
 
 /**
+ * 解析 Markdown 内容，提取 frontmatter 和正文。
+ *
  * Parse markdown content to extract frontmatter and body.
  */
 export function parseFrontmatter(markdown: string): ParsedMarkdown {
@@ -74,6 +83,8 @@ export function parseFrontmatter(markdown: string): ParsedMarkdown {
 }
 
 /**
+ * 根据 frontmatter 字段和正文构建记忆文件内容。
+ *
  * Build a memory file from frontmatter fields and body content.
  */
 export function buildMemoryFile(params: {
@@ -92,6 +103,7 @@ ${params.content}
 `
 }
 
+// 按需为 YAML 值添加引号，防止特殊字符破坏格式
 function escapeYamlValue(value: string): string {
   const needsQuotes = /[":#{}[\]|>&@`]/.test(value) || value.startsWith(' ') || value.endsWith(' ')
   if (needsQuotes) {

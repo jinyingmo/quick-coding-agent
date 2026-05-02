@@ -1,3 +1,5 @@
+/** 中文说明：工具层模块。 */
+
 /**
  * `edit_file` — precise find-and-replace editing.
  *
@@ -12,6 +14,8 @@
  *  - `old_string` must appear exactly once in the file content; if there are
  *    multiple occurrences the tool returns an error asking for more context.
  *  - `old_string === new_string` is rejected early.
+ *
+ * 中文说明：edit_file 工具，通过精确查找替换（old_string → new_string）来编辑文件，保证差异最小化。
  */
 
 import { readFile, writeFile } from 'fs/promises'
@@ -47,7 +51,9 @@ export const editFileTool: Tool<typeof inputSchema, Output> = {
     'For new files or complete rewrites, use write_file instead. ' +
     'For Jupyter notebooks, use bash with the nbformat CLI.',
   inputSchema,
+  /** 始终返回 false，编辑操作会写入文件系统。 */
   isReadOnly: () => false,
+  /** 读取文件内容，查找 old_string（必须唯一匹配），替换后写回文件。 */
   async call(input, ctx) {
     const { file_path, old_string, new_string } = input
 

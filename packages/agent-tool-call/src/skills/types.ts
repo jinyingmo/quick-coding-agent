@@ -1,3 +1,5 @@
+/** 中文说明：Skills 解析与提示模块。 */
+
 export type SkillDoc = {
   id: string
   name: string

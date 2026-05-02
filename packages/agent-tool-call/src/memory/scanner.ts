@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * Memory directory scanning primitives.
  *
@@ -14,6 +16,7 @@ import { parseMemoryType } from './types.js'
 const MAX_MEMORY_FILES = 200
 const FRONTMATTER_MAX_LINES = 30
 
+/** 扫描记忆目录中所有 .md 文件，解析 frontmatter 并返回按修改时间降序的头信息列表 */
 export async function scanMemoryFiles(memoryDir: string): Promise<MemoryHeader[]> {
   try {
     const entries = await readdir(memoryDir, { recursive: true })
@@ -55,6 +58,8 @@ export async function scanMemoryFiles(memoryDir: string): Promise<MemoryHeader[]
 }
 
 /**
+ * 将记忆头列表格式化为文本清单，每行一个文件。
+ *
  * Format memory headers as a text manifest: one line per file.
  */
 export function formatMemoryManifest(memories: MemoryHeader[]): string {

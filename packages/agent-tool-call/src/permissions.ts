@@ -1,41 +1,15 @@
-/**
- * Permission strategies (CanUseToolFn).
- *
- * Mirrors `createAutoMemCanUseTool` in
- * `src/services/extractMemories/extractMemories.ts`:
- *
- *   - The main agent uses `allowAllPermission`: any tool, any input.
- *   - The background extractor uses `restrictToMemoryDirPermission(memoryDir)`:
- *     reads/lists are unrestricted, but writes are only allowed when the
- *     `file_path` falls inside the auto-memory directory.
- *
- * The CanUseToolFn is the single chokepoint where every tool_use input is
- * validated before `tool.call()` is invoked, so adding new policies is just
- * a matter of writing another factory here.
- */
+/** 中文说明：核心 agent 模块。 */
 
 import { resolve } from 'path'
 import type { CanUseToolFn, PermissionResult, Tool, ToolUseContext } from './types.js'
 
-/** Permissive policy used by the main agent. */
+/** 默认的权限函数，允许所有工具调用，不修改输入。 */
 export const allowAllPermission: CanUseToolFn = async (_tool, input) => ({
   behavior: 'allow',
   updatedInput: input,
 })
 
-/**
- * Build a CanUseToolFn that constrains writes to a single directory.
- *
- *   - Read-only tools (`tool.isReadOnly(input) === true`) are always allowed.
- *   - Write/edit tools are allowed only when their input contains a
- *     `file_path` field that resolves under `memoryDir`.
- *   - Anything else is denied with an explanatory message that gets sent
- *     back to the model as the tool_result content (so the model can
- *     self-correct without aborting the turn).
- *
- * Mirrors `createAutoMemCanUseTool` in the parent project, including the
- * "send the rejection reason back to the model" pattern.
- */
+/** 创建权限限制函数：只读工具直接允许，写入工具仅允许在 memoryDir 目录内操作。 */
 export function restrictToMemoryDirPermission(memoryDir: string): CanUseToolFn {
   const memRoot = resolve(memoryDir) + '/'
 

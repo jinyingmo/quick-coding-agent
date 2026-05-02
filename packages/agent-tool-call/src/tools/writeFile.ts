@@ -1,9 +1,13 @@
+/** 中文说明：工具层模块。 */
+
 /**
  * `write_file` — write a UTF-8 text file (creating parent dirs).
  *
  * Mirrors `FileWriteTool` in the parent project. `isReadOnly` is `false` —
  * this is the gate the extractor's CanUseToolFn uses to enforce that writes
  * only happen inside the auto-memory directory.
+ *
+ * 中文说明：write_file 工具，创建或覆盖写入 UTF-8 文本文件，自动创建父目录。
  */
 
 import { mkdir, writeFile } from 'fs/promises'
@@ -21,7 +25,9 @@ export const writeFileTool: Tool<typeof inputSchema, { bytesWritten: number }> =
   description:
     'Create or overwrite a UTF-8 text file. Parent directories are created automatically. Use this to save a memory: write a topic file (e.g. user_role.md) AND update MEMORY.md afterwards.',
   inputSchema,
+  /** 始终返回 false，写入操作会修改文件系统。 */
   isReadOnly: () => false,
+  /** 递归创建父目录后写入文件内容，返回写入字节数。 */
   async call(input, ctx) {
     try {
       await mkdir(dirname(input.file_path), { recursive: true })

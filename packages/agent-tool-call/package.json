@@ -8,6 +8,7 @@
     "start": "npm run build && node dist/cli.js",
     "demo": "npm run build && node dist/cli.js --scripted",
     "repl": "npm run build && node dist/cli.js --repl",
+    "serve": "npm run build && node dist/serverCli.js",
     "memory:demo": "npm run build && node dist/memoryCli.js --demo",
     "memory:demo:local": "npm run build && node dist/memoryCli.js --demo --no-llm",
     "test": "vitest run",

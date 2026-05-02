@@ -1,9 +1,12 @@
+/** 中文说明：Skills 解析与提示模块。 */
+
 import { readdir, readFile, stat } from 'fs/promises'
 import { basename, join, resolve } from 'path'
 import type { SkillDoc } from './types.js'
 
 type Frontmatter = Record<string, string>
 
+// 解析 Markdown 文件的 YAML frontmatter 头部，返回 frontmatter 键值对和正文
 function parseFrontmatter(raw: string): { frontmatter: Frontmatter; body: string } {
   const trimmed = raw.replace(/^\uFEFF/, '')
   if (!trimmed.startsWith('---\n')) {
@@ -30,10 +33,12 @@ function parseFrontmatter(raw: string): { frontmatter: Frontmatter; body: string
   return { frontmatter, body }
 }
 
+// 规范化技能 ID：转为小写并将非法字符替换为短横线
 function normalizeId(input: string): string {
   return input.trim().toLowerCase().replace(/[^a-z0-9_\-:.]/g, '-')
 }
 
+// 从 frontmatter 中解析允许使用的工具列表（支持多种键名和 JSON 数组格式）
 function parseAllowedTools(frontmatter: Frontmatter): string[] {
   const raw =
     frontmatter['allowed-tools'] ??
@@ -57,6 +62,7 @@ function parseAllowedTools(frontmatter: Frontmatter): string[] {
     .filter(Boolean)
 }
 
+// 异步检查文件是否存在
 async function fileExists(path: string): Promise<boolean> {
   try {
     await stat(path)
@@ -66,6 +72,7 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+// 从 SKILL.md 文件中加载单个技能定义
 async function loadSkillFromFile(path: string): Promise<SkillDoc> {
   const raw = await readFile(path, 'utf-8')
   const { frontmatter, body } = parseFrontmatter(raw)
@@ -86,6 +93,11 @@ async function loadSkillFromFile(path: string): Promise<SkillDoc> {
 }
 
 /**
+ * 从根目录中发现技能定义。
+ * 支持以下两种目录结构：
+ *   - <root>/SKILL.md
+ *   - <root>/<skill-name>/SKILL.md
+ *
  * Discover skills from root directories.
  * Supports either:
  *   - <root>/SKILL.md

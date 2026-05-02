@@ -1,3 +1,5 @@
+/** 中文说明：核心 agent 模块。 */
+
 /**
  * CLI entry point.
  *
@@ -15,6 +17,7 @@ import { resolve } from 'path'
 import { Agent } from './agent.js'
 import { runScripted } from './scripted.js'
 
+// 解析命令行参数，返回运行模式和记忆目录
 function parseArgs(argv: string[]): { mode: 'scripted' | 'repl'; memoryDir: string } {
   const args = new Set(argv.slice(2))
   const mode = args.has('--scripted') ? 'scripted' : 'repl'
@@ -26,6 +29,7 @@ function parseArgs(argv: string[]): { mode: 'scripted' | 'repl'; memoryDir: stri
   return { mode, memoryDir }
 }
 
+// CLI 主入口：根据参数启动 scripted 演示或 REPL 交互模式
 async function main() {
   const { mode, memoryDir } = parseArgs(process.argv)
 
@@ -65,6 +69,7 @@ async function main() {
   })
 
   const rl = createInterface({ input: process.stdin, output: process.stdout })
+  // 封装 readline.question 为 Promise 形式的询问函数
   const ask = (q: string) => new Promise<string>(res => rl.question(q, res))
 
   while (true) {

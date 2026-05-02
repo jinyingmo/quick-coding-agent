@@ -1,3 +1,5 @@
+/** 中文说明：工具层模块。 */
+
 /**
  * Built-in tool registry.
  *
@@ -16,6 +18,8 @@
  *   write_file    — create or fully overwrite a file
  *   list_dir      — list directory contents
  *   search_memory — semantic search over the memory directory
+ *
+ * 中文说明：内置工具注册表，包含所有可用工具的数组及按名称查找工具的函数。
  */
 
 import type { Tool } from '../types.js'
@@ -43,6 +47,7 @@ export const ALL_TOOLS: Tool[] = [
   searchMemoryTool,
 ]
 
+/** 按工具名称在 ALL_TOOLS 数组中查找并返回对应工具，未找到返回 undefined。 */
 export function findToolByName(name: string): Tool | undefined {
   return ALL_TOOLS.find(t => t.name === name)
 }

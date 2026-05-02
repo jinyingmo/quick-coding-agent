@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * Memory retrieval and search.
  *
@@ -29,16 +31,18 @@ export type RetrievalResult = {
 const MAX_RELEVANT = 5
 
 /**
+ * 查找与查询相关的记忆文件：优先使用 Kimi LLM 语义选择，不可用时回退到本地关键字评分。
+ *
  * Find memory files relevant to a query.
  *
  * By default, attempts to use the Kimi LLM API for semantic relevance selection.
  * If the API is unavailable (no key, network error, timeout), gracefully falls
  * back to local keyword-based scoring.
  *
- * @param query The user's query
- * @param memoryDir Directory containing memory files
- * @param options Retrieval options
- * @returns Relevant memories + metadata about which engine was used
+ * @param query 用户查询文本
+ * @param memoryDir 记忆文件目录
+ * @param options 检索选项
+ * @returns 相关记忆列表及使用的搜索引擎元数据
  */
 export async function findRelevantMemories(
   query: string,
@@ -106,6 +110,8 @@ export async function findRelevantMemories(
 }
 
 /**
+ * 使用关键字匹配进行相关性评分（LLM 不可用时的本地回退方案）。
+ *
  * Local keyword-based relevance scoring (fallback when LLM is unavailable).
  */
 async function findRelevantMemoriesLocal(
@@ -160,6 +166,8 @@ async function findRelevantMemoriesLocal(
 }
 
 /**
+ * 加载一批记忆头信息对应的完整文件内容。
+ *
  * Load full content for a list of memory headers.
  */
 async function loadMemoryContents(
@@ -187,6 +195,8 @@ async function loadMemoryContents(
 }
 
 /**
+ * 格式化相关记忆列表，附带新鲜度提示。
+ *
  * Format relevant memories for display, with freshness notes.
  */
 export function formatRelevantMemories(memories: RelevantMemory[]): string {

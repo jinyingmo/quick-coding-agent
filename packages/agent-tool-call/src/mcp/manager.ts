@@ -1,3 +1,5 @@
+/** 中文说明：MCP 集成模块。 */
+
 import { randomUUID } from 'crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import type { ToolUseContext } from '../types.js'
@@ -51,6 +53,7 @@ class MCPServerSession {
   private initialized = false
   private closed = false
 
+  /** 创建 MCP 服务端会话，启动子进程并通过 stdio 管道通信 */
   constructor(server: MCPServerConfig, cwd: string, log: ToolUseContext['log']) {
     this.server = server
     this.log = log
@@ -80,6 +83,7 @@ class MCPServerSession {
     })
   }
 
+  /** 初始化 MCP 会话：发送 initialize 请求并通知已初始化 */
   async initialize(): Promise<void> {
     if (this.initialized) return
 
@@ -110,6 +114,7 @@ class MCPServerSession {
     this.initialized = true
   }
 
+  /** 列出远程 MCP 服务器提供的所有工具（支持分页游标） */
   async listTools(): Promise<MCPRemoteTool[]> {
     await this.initialize()
 
@@ -138,6 +143,7 @@ class MCPServerSession {
     return tools
   }
 
+  /** 调用远程 MCP 工具的指定方法并传入参数 */
   async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     await this.initialize()
     return this.request(
@@ -150,6 +156,7 @@ class MCPServerSession {
     )
   }
 
+  /** 关闭 MCP 会话：发送 SIGTERM 并拒绝所有待处理请求 */
   close(): void {
     if (this.closed) return
     this.closed = true
@@ -157,6 +164,7 @@ class MCPServerSession {
     this.rejectAllPending(new Error(`[mcp:${this.server.name}] closed`))
   }
 
+  // 处理子进程 stdout 数据：根据 Content-Length 帧协议拆包并分发消息
   private onStdout(chunk: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, chunk])
 
@@ -193,6 +201,7 @@ class MCPServerSession {
     }
   }
 
+  // 处理收到的 JSON-RPC 消息：根据 id 关联到待处理请求，或记录服务器通知
   private handleMessage(msg: JSONRPCResponse): void {
     if (typeof msg.id === 'string') {
       const p = this.pending.get(msg.id)
@@ -214,6 +223,7 @@ class MCPServerSession {
     }
   }
 
+  // 从帧头部解析 Content-Length 头字段的值
   private parseContentLength(headerRaw: string): number {
     const lines = headerRaw.split('\r\n')
     for (const line of lines) {
@@ -229,6 +239,7 @@ class MCPServerSession {
     return -1
   }
 
+  // 发送 JSON-RPC 请求并返回 Promise，支持超时处理
   private request(method: string, params: JSONObject | undefined, timeoutMs: number): Promise<unknown> {
     if (this.closed) {
       throw new Error(`[mcp:${this.server.name}] session is closed`)
@@ -253,11 +264,13 @@ class MCPServerSession {
     })
   }
 
+  // 发送 JSON-RPC 通知（无 id 字段，无需响应）
   private notify(method: string, params: JSONObject): void {
     if (this.closed) return
     this.writeFrame({ jsonrpc: '2.0', method, params } as Record<string, unknown>)
   }
 
+  // 按照 JSON-RPC 帧协议写数据到子进程 stdin
   private writeFrame(payload: Record<string, unknown>): void {
     const json = JSON.stringify(payload)
     const len = Buffer.byteLength(json, 'utf-8')
@@ -265,6 +278,7 @@ class MCPServerSession {
     this.proc.stdin.write(frame)
   }
 
+  // 拒绝所有待处理的请求（通常在会话关闭或出错时调用）
   private rejectAllPending(err: Error): void {
     for (const [id, pending] of this.pending.entries()) {
       clearTimeout(pending.timeout)
@@ -283,10 +297,12 @@ export class MCPManager {
   private readonly sessions = new Map<string, MCPServerSession>()
   private readonly opts: MCPManagerOptions
 
+  /** 创建 MCP 管理器 */
   constructor(opts: MCPManagerOptions) {
     this.opts = opts
   }
 
+  /** 列出所有已配置 MCP 服务器的工具目录 */
   async listAllTools(): Promise<MCPToolCatalog[]> {
     if (this.opts.servers.length === 0) return []
 
@@ -299,6 +315,7 @@ export class MCPManager {
     return out
   }
 
+  /** 调用指定 MCP 服务器上的工具方法 */
   async callTool(
     serverName: string,
     toolName: string,
@@ -311,6 +328,7 @@ export class MCPManager {
     return session.callTool(toolName, args)
   }
 
+  /** 释放所有 MCP 会话连接 */
   async dispose(): Promise<void> {
     for (const session of this.sessions.values()) {
       session.close()
@@ -318,6 +336,7 @@ export class MCPManager {
     this.sessions.clear()
   }
 
+  // 获取或创建指定 MCP 服务器的会话实例
   private getOrCreateSession(server: MCPServerConfig): MCPServerSession {
     const existing = this.sessions.get(server.name)
     if (existing) return existing

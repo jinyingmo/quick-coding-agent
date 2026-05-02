@@ -1,3 +1,5 @@
+/** 中文说明：MCP 集成模块。 */
+
 import { readFile } from 'fs/promises'
 import { resolve } from 'path'
 
@@ -14,8 +16,10 @@ export type MCPServerConfig = {
 export type MCPSettings = {
   enabled: boolean
   servers: MCPServerConfig[]
+  allowedTools: string[]
 }
 
+// 从 JSON 字符串中解析 MCP 服务器配置数组
 function parseServers(raw: string): MCPServerConfig[] {
   const parsed = JSON.parse(raw) as unknown
   if (!Array.isArray(parsed)) {
@@ -50,11 +54,13 @@ function parseServers(raw: string): MCPServerConfig[] {
   })
 }
 
+// 类型守卫：检查值是否为 Record<string, string> 类型
 function isStringMap(v: unknown): v is Record<string, string> {
   if (!v || typeof v !== 'object') return false
   return Object.values(v).every(x => typeof x === 'string')
 }
 
+/** 从环境变量 MCP_SERVERS 或 MCP_SERVERS_FILE 中加载 MCP 设置 */
 export async function loadMCPSettingsFromEnv(): Promise<MCPSettings> {
   const fromEnv = process.env.MCP_SERVERS
   const fromFile = process.env.MCP_SERVERS_FILE
@@ -68,16 +74,22 @@ export async function loadMCPSettingsFromEnv(): Promise<MCPSettings> {
     servers = parseServers(content)
   }
 
+  const allowedTools = (process.env.MCP_ALLOWED_TOOLS ?? '')
+    .split(',')
+    .map(x => x.trim())
+    .filter(Boolean)
+
   const enabledFlag = (process.env.MCP_ENABLED ?? '').trim().toLowerCase()
   const enabled =
     enabledFlag === '1' || enabledFlag === 'true' || enabledFlag === 'yes'
       ? true
       : enabledFlag === '0' || enabledFlag === 'false' || enabledFlag === 'no'
         ? false
-        : servers.length > 0
+        : servers.length > 0 && allowedTools.length > 0
 
   return {
     enabled,
     servers,
+    allowedTools,
   }
 }

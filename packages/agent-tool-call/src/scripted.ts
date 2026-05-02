@@ -1,3 +1,5 @@
+/** 中文说明：核心 agent 模块。 */
+
 /**
  * Scripted (no-API) demonstration.
  *
@@ -33,10 +35,13 @@ import { createAssistantMessage, createUserMessage } from './types.js'
 // Each call returns the next pre-baked AssistantMessage.
 // ────────────────────────────────────────────────────────────────────────────
 
+// 预设模型类：按固定顺序回放预定义的 AssistantMessage 序列
 class CannedModel {
   private idx = 0
+  // 构造预设模型，接收预定义的轮次消息数组
   constructor(private readonly turns: AssistantMessage[]) {}
 
+  // 返回下一个预设的 AssistantMessage，耗尽时返回 end_turn
   next(): AssistantMessage {
     if (this.idx >= this.turns.length) {
       return createAssistantMessage(
@@ -50,6 +55,7 @@ class CannedModel {
 
 // Patch `callLLM` for the scripted demo by injecting our own queryLoop wrapper
 // that replaces the LLM call with the canned model.
+// 运行预设脚本化对话循环：用 CannedModel 替代真实 LLM 调用
 async function runScriptedLoop(params: {
   systemPrompt: string
   initialMessage: Message
@@ -139,6 +145,7 @@ async function runScriptedLoop(params: {
 // The actual scripted scenario
 // ────────────────────────────────────────────────────────────────────────────
 
+/** 运行脚本化演示：执行三个测试场景，验证工具调度、权限策略和错误处理。 */
 export async function runScripted(memoryDir: string): Promise<void> {
   console.log('\n══════════════════════════════════════════════════════════════')
   console.log('  Scripted demo — exercising the agent loop end-to-end')

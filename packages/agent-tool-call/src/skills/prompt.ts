@@ -1,5 +1,8 @@
+/** 中文说明：Skills 解析与提示模块。 */
+
 import type { SkillDoc } from './types.js'
 
+/** 根据激活的技能列表构建 System Prompt 中的技能提示段落 */
 export function buildSkillsPromptSection(activeSkills: SkillDoc[]): string {
   if (activeSkills.length === 0) return ''
 

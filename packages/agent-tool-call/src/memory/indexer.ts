@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * MEMORY.md index management.
  *
@@ -21,6 +23,8 @@ export type EntrypointTruncation = {
 }
 
 /**
+ * 按行数和字节数上限截断 MEMORY.md 内容。
+ *
  * Truncate MEMORY.md content to line AND byte caps.
  */
 export function truncateEntrypointContent(raw: string): EntrypointTruncation {
@@ -67,6 +71,8 @@ export function truncateEntrypointContent(raw: string): EntrypointTruncation {
 }
 
 /**
+ * 从记忆目录读取 MEMORY.md 入口文件，自动截断超限内容。
+ *
  * Read the MEMORY.md entrypoint from a memory directory.
  */
 export async function readEntrypoint(memoryDir: string): Promise<string> {
@@ -80,6 +86,8 @@ export async function readEntrypoint(memoryDir: string): Promise<string> {
 }
 
 /**
+ * 在 MEMORY.md 中添加记忆文件指针，若已索引则更新对应的行。
+ *
  * Add a pointer to a memory file in MEMORY.md.
  * If the file is already indexed, updates its hook line.
  */
@@ -113,6 +121,8 @@ export async function indexMemory(
 }
 
 /**
+ * 从 MEMORY.md 中移除指定记忆文件的引用行。
+ *
  * Remove a memory file reference from MEMORY.md.
  */
 export async function unindexMemory(

@@ -1,3 +1,5 @@
+/** 中文说明：核心 agent 模块。 */
+
 /**
  * Kimi (Moonshot) LLM client with tool-calling support.
  *
@@ -34,6 +36,7 @@ export type LLMConfig = {
   timeoutMs: number
 }
 
+// 从环境变量加载 LLM 配置（API Key、模型名称、基础 URL、超时时间）
 export function loadLLMConfig(): LLMConfig {
   return {
     apiKey: process.env.KIMI_API_KEY,
@@ -43,6 +46,7 @@ export function loadLLMConfig(): LLMConfig {
   }
 }
 
+// 检查 LLM 服务是否可用（API Key 是否已配置）
 export function isLLMAvailable(cfg: LLMConfig = loadLLMConfig()): boolean {
   return !!cfg.apiKey && cfg.apiKey.length > 0
 }
@@ -56,6 +60,7 @@ export function isLLMAvailable(cfg: LLMConfig = loadLLMConfig()): boolean {
  * We intentionally keep this small: object / string / number / boolean,
  * plus optional + description, which covers everything our tools declare.
  */
+/** 将 Zod schema 转换为 Moonshot API 兼容的 JSON Schema 子集。 */
 export function zodToJsonSchema(schema: z.ZodType): Record<string, unknown> {
   if (schema instanceof z.ZodObject) {
     const shape = schema.shape as Record<string, z.ZodType>
@@ -115,6 +120,7 @@ type OpenAIMessage =
  * A user message containing tool_result blocks expands into multiple
  * `role: 'tool'` entries, exactly mirroring the SDK's expectation.
  */
+/** 将内部 Message 格式展开为一个或多个 OpenAI 兼容消息。 */
 function toOpenAIMessages(message: Message): OpenAIMessage[] {
   if (message.type === 'user') {
     const out: OpenAIMessage[] = []
@@ -162,6 +168,7 @@ function toOpenAIMessages(message: Message): OpenAIMessage[] {
   ]
 }
 
+/** 将系统提示词和对话历史构建为 OpenAI 格式的消息数组。 */
 export function buildOpenAIMessages(
   systemPrompt: string,
   history: Message[],
@@ -191,6 +198,7 @@ export type LLMCallOptions = {
  * The caller (queryLoop) decides whether to terminate (no tool_use blocks)
  * or to dispatch the tool calls and run another iteration.
  */
+/** 调用 LLM 一次，返回完整的 AssistantMessage（调用者 queryLoop 决定是否终止或继续下一轮）。 */
 export async function callLLM(opts: LLMCallOptions): Promise<AssistantMessage> {
   const cfg = opts.config ?? loadLLMConfig()
   if (!cfg.apiKey) {

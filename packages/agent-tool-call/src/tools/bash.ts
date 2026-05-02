@@ -1,3 +1,5 @@
+/** 中文说明：工具层模块。 */
+
 /**
  * `bash` — execute a shell command and capture stdout / stderr.
  *
@@ -10,6 +12,8 @@
  *  - A default timeout of 30 s prevents hung processes.
  *  - `isReadOnly()` always returns false so the permission layer can
  *    gate it independently from read-only tools.
+ *
+ * 中文说明：bash 工具，在 agent 工作目录中执行 Shell 命令并返回 stdout/stderr 和退出码。
  */
 
 import { exec } from 'child_process'
@@ -17,6 +21,7 @@ import { promisify } from 'util'
 import { z } from 'zod'
 import type { Tool } from '../types.js'
 
+/** 将 child_process.exec 包装为返回 Promise 的版本，方便 async/await 使用。 */
 const execAsync = promisify(exec)
 
 const inputSchema = z.object({
@@ -40,7 +45,9 @@ export const bashTool: Tool<typeof inputSchema, Output> = {
     'Returns stdout, stderr, and the exit code. ' +
     'Prefer targeted read/edit tools for file content — use bash for process execution.',
   inputSchema,
+  /** 始终返回 false，标记此工具会修改系统状态（写入/执行），需经过权限检查。 */
   isReadOnly: () => false,
+  /** 执行 Shell 命令，捕获 stdout/stderr，超时或非零退出码时返回错误信息。 */
   async call(input, ctx) {
     const timeoutMs = input.timeout_ms ?? 30_000
     ctx.log(`[bash] ${input.command}`, 'info')

@@ -1,3 +1,5 @@
+/** 中文说明：工具层模块。 */
+
 /**
  * `glob` — find files matching a shell-style glob pattern.
  *
@@ -11,6 +13,8 @@
  * Hidden files and directories (dotfiles) are skipped unless the pattern
  * explicitly starts with a dot segment. The notorious performance-killers
  * (node_modules, .git, dist, build, .next, coverage) are always excluded.
+ *
+ * 中文说明：glob 工具，使用 shell 风格通配符模式匹配文件路径，纯 Node.js 实现，自动排除常见大型目录。
  */
 
 import { readdir, stat } from 'fs/promises'
@@ -39,6 +43,8 @@ const ALWAYS_SKIP = new Set([
 /**
  * Convert a glob pattern string to a RegExp that matches relative posix paths.
  * Only handles `**`, `*`, and `?` — sufficient for the tool's documented use.
+ *
+ * 中文说明：将 glob 模式字符串转换为匹配相对 POSIX 路径的正则表达式，仅支持 **、* 和 ?。
  */
 function globToRegExp(pattern: string): RegExp {
   let re = ''
@@ -73,6 +79,7 @@ function globToRegExp(pattern: string): RegExp {
 // Recursive traversal
 // ────────────────────────────────────────────────────────────────────────────
 
+// 递归遍历目录，收集匹配正则表达式的文件路径，达到 limit 上限后停止。
 async function walk(
   dir: string,
   rootDir: string,
@@ -93,6 +100,7 @@ async function walk(
   names.sort()
 
   await Promise.all(
+    // 并发处理每个目录条目：跳过排除目录，递归进入子目录或检查文件是否匹配。
     names.map(async name => {
       if (results.length >= limit) return
       if (ALWAYS_SKIP.has(name)) return
@@ -150,7 +158,9 @@ export const globTool: Tool<typeof inputSchema, Output> = {
     'Automatically excludes node_modules, .git, dist, build, .next, and coverage directories. ' +
     'When you need to find files by name pattern, prefer this over bash + find.',
   inputSchema,
+  /** 始终返回 true，此工具仅读取文件系统，不产生副作用。 */
   isReadOnly: () => true,
+  /** 在目录中按 glob 模式搜索文件，返回最多 100 个匹配的绝对路径。 */
   async call(input, ctx) {
     const searchDir = input.path ?? ctx.cwd
     const LIMIT = 100

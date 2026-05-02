@@ -1,22 +1,14 @@
-/**
- * High-level Agent orchestrator.
- *
- * Wires together:
- *   - System prompt (memory section + tool catalog)
- *   - Capability providers (local tools + optional MCP tools)
- *   - Permission policy (allow-all for the main agent)
- *   - Stop hook → background memory extraction
- */
+/** 中文说明：核心 agent 模块。 */
 
 import { delimiter, resolve } from 'path'
 import { allowAllPermission } from './permissions.js'
-import { runQueryLoop, type StopHookFn } from './query.js'
+import { runQueryLoop, type QueryResult, type StopHookFn } from './query.js'
 import {
   initExtractMemories,
   type ExtractMemoriesController,
 } from './extractMemories.js'
 import { buildSystemPrompt } from './systemPrompt.js'
-import type { Message, Tool, ToolUseContext } from './types.js'
+import type { CanUseToolFn, Message, Tool, ToolUseContext } from './types.js'
 import { createUserMessage, getText } from './types.js'
 import { createLocalToolsProvider } from './capabilities/localProvider.js'
 import {
@@ -45,17 +37,15 @@ export type AgentOptions = {
   cwd: string
   memoryDir: string
   agentName?: string
-  /** Throttle for the background extractor. */
   turnsPerExtraction?: number
   maxTurns?: number
   log?: ToolUseContext['log']
   onMemoriesSaved?: (paths: string[]) => void
-  /** Optional external capability providers. Local provider is always included. */
   capabilityProviders?: CapabilityProvider[]
-  /** Optional MCP settings. If omitted, environment variables are used. */
   mcpSettings?: MCPSettings
-  /** Optional skills runtime config. */
   skills?: SkillRuntimeOptions
+  canUseTool?: CanUseToolFn
+  autoExtractMemories?: boolean
 }
 
 type RuntimeState = {
@@ -65,6 +55,7 @@ type RuntimeState = {
   strictSkillToolAllowlist: boolean
 }
 
+/** Agent 类：封装 agent 运行时核心逻辑，包括会话管理、工具调度、技能系统和记忆提取。 */
 export class Agent {
   readonly opts: AgentOptions
   private tools: Tool[] = []
@@ -74,10 +65,14 @@ export class Agent {
   private readonly abortController = new AbortController()
   private readonly log: NonNullable<AgentOptions['log']>
   private readonly runtimeWarnings: string[] = []
+  private readonly canUseTool: CanUseToolFn
+  private readonly autoExtractMemories: boolean
+  private lastSavedMemoryPaths: string[] = []
 
   private runtimeState: RuntimeState | undefined
   private runtimeInitPromise: Promise<void> | undefined
 
+  // 构造 Agent 实例，初始化日志记录器、权限函数和记忆提取器
   constructor(opts: AgentOptions) {
     this.opts = opts
     this.log =
@@ -87,13 +82,19 @@ export class Agent {
         const prefix = `[${level}]`.padEnd(7)
         console.error(`${prefix} ${msg}`)
       })
+    this.canUseTool = opts.canUseTool ?? allowAllPermission
+    this.autoExtractMemories = opts.autoExtractMemories ?? true
     this.extractor = initExtractMemories({
       memoryDir: opts.memoryDir,
       turnsPerExtraction: opts.turnsPerExtraction ?? 1,
-      onSaved: paths => opts.onMemoriesSaved?.(paths),
+      onSaved: paths => {
+        this.lastSavedMemoryPaths = [...paths]
+        opts.onMemoriesSaved?.(paths)
+      },
     })
   }
 
+  // 确保运行时已初始化（懒加载，单次执行）
   private async ensureRuntimeInitialized(): Promise<void> {
     if (this.runtimeState) return
     if (!this.runtimeInitPromise) {
@@ -102,6 +103,7 @@ export class Agent {
     await this.runtimeInitPromise
   }
 
+  // 初始化运行时环境：加载本地工具提供商、MCP 服务和技能
   private async initRuntime(): Promise<void> {
     const providers: CapabilityProvider[] = [createLocalToolsProvider()]
 
@@ -111,7 +113,10 @@ export class Agent {
 
     const mcpSettings = this.opts.mcpSettings ?? (await loadMCPSettingsFromEnv())
     if (mcpSettings.enabled && mcpSettings.servers.length > 0) {
-      providers.push(createMCPProvider({ servers: mcpSettings.servers }))
+      providers.push(createMCPProvider({
+        servers: mcpSettings.servers,
+        allowTools: mcpSettings.allowedTools,
+      }))
       this.log(
         `[agent] mcp enabled: ${mcpSettings.servers.length} server(s) configured`,
         'info',
@@ -155,12 +160,11 @@ export class Agent {
     }
   }
 
+  // 解析技能目录根路径（支持显式传入或从环境变量读取）
   private resolveSkillRoots(explicit?: string[]): string[] {
     if (explicit && explicit.length > 0) return explicit.map(p => resolve(p))
-
     const raw = process.env.SKILL_ROOTS?.trim()
     if (!raw) return []
-
     return raw
       .split(delimiter)
       .map(p => p.trim())
@@ -168,18 +172,18 @@ export class Agent {
       .map(p => resolve(p))
   }
 
+  // 解析默认技能 ID 列表（支持显式传入或从环境变量 SKILLS 读取）
   private resolveDefaultSkillIds(explicit?: string[]): string[] {
     if (explicit && explicit.length > 0) return explicit
-
     const raw = process.env.SKILLS?.trim()
     if (!raw) return []
-
     return raw
       .split(',')
       .map(x => x.trim())
       .filter(Boolean)
   }
 
+  // 刷新工具和能力列表，并应用技能工具策略
   private async refreshCapabilities(): Promise<CapabilityResolveResult> {
     await this.ensureRuntimeInitialized()
     const state = this.runtimeState!
@@ -200,6 +204,7 @@ export class Agent {
     return resolved
   }
 
+  // 根据当前活跃技能的工具白名单过滤工具列表
   private applySkillToolPolicy(tools: Tool[]): Tool[] {
     const state = this.runtimeState
     if (!state) return tools
@@ -219,6 +224,7 @@ export class Agent {
     })
   }
 
+  // 检测用户输入中的技能 @mention 并动态激活对应技能
   private async applySkillMentions(userInput: string): Promise<boolean> {
     await this.ensureRuntimeInitialized()
     const state = this.runtimeState!
@@ -252,10 +258,7 @@ export class Agent {
     return true
   }
 
-  /**
-   * Rebuild the system prompt — call this when memory contents change
-   * out-of-band so the next turn sees the fresh MEMORY.md.
-   */
+  /** 重建系统提示词，包含最新的工具列表、技能和记忆文件。 */
   async refreshSystemPrompt(): Promise<void> {
     await this.refreshCapabilities()
     await this.ensureRuntimeInitialized()
@@ -271,52 +274,85 @@ export class Agent {
     })
   }
 
-  /** Run one full turn for the given user input. Returns the assistant reply text. */
-  async chat(userInput: string): Promise<string> {
+  // 构建工具调用的上下文对象
+  private buildContext(): ToolUseContext {
+    return {
+      cwd: this.opts.cwd,
+      memoryDir: this.opts.memoryDir,
+      log: this.log,
+      signal: this.abortController.signal,
+    }
+  }
+
+  /** 执行一个完整的对话轮次：处理技能、刷新提示词、运行查询循环。 */
+  async executeTurn(userInput: string): Promise<QueryResult> {
     const skillChanged = await this.applySkillMentions(userInput)
     if (!this.systemPrompt || skillChanged) {
       await this.refreshSystemPrompt()
     }
 
     this.history.push(createUserMessage(userInput))
+    const ctx = this.buildContext()
 
-    const ctx: ToolUseContext = {
-      cwd: this.opts.cwd,
-      memoryDir: this.opts.memoryDir,
-      log: this.log,
-      signal: this.abortController.signal,
-    }
-
-    const stopHook: StopHookFn = async ({ messages, context }) => {
-      // Fire-and-forget: don't block returning the reply on extraction.
-      void this.extractor.run(messages, context)
-    }
+    const stopHooks: StopHookFn[] = this.autoExtractMemories
+      ? [async ({ messages, context }) => {
+          void this.extractor.run(messages, context)
+        }]
+      : []
 
     const result = await runQueryLoop({
       systemPrompt: this.systemPrompt!,
       messages: this.history,
       tools: this.tools,
-      canUseTool: allowAllPermission,
+      canUseTool: this.canUseTool,
       context: ctx,
       maxTurns: this.opts.maxTurns ?? 10,
-      stopHooks: [stopHook],
+      stopHooks,
     })
 
-    // Persist newly added messages (the queryLoop returned a *copy* with the
-    // assistant + any tool_result rounds appended).
     while (this.history.length < result.messages.length) {
       this.history.push(result.messages[this.history.length]!)
     }
 
-    return getText(result.finalMessage)
+    return result
   }
 
-  /** Wait for any in-flight memory extraction to complete (called on shutdown). */
+  /** 向 agent 发送聊天消息并返回文本回复。 */
+  async chat(userInput: string): Promise<string> {
+    const result = await this.executeTurn(userInput)
+    if (result.status === 'confirm_required') {
+      throw new Error(`Human approval required: ${result.reason ?? 'This action requires review.'}`)
+    }
+    return result.finalMessage ? getText(result.finalMessage) : ''
+  }
+
+  /** 立即触发记忆提取并等待完成，返回本次保存的记忆文件路径。 */
+  async extractMemoriesNow(): Promise<string[]> {
+    this.lastSavedMemoryPaths = []
+    if (this.history.length === 0) return []
+    await this.extractor.run(this.historySnapshot(), this.buildContext())
+    await this.extractor.drain(10_000)
+    return [...this.lastSavedMemoryPaths]
+  }
+
+  /** 返回当前对话历史的快照副本。 */
+  historySnapshot(): Message[] {
+    return [...this.history]
+  }
+
+  /** 替换整个对话历史记录。 */
+  replaceHistory(messages: Message[]): void {
+    this.history.length = 0
+    this.history.push(...messages)
+  }
+
+  /** 等待所有后台任务完成并释放资源。 */
   async drain(timeoutMs?: number): Promise<void> {
     await this.extractor.drain(timeoutMs)
     await this.disposeProviders()
   }
 
+  // 释放所有工具提供商的资源
   private async disposeProviders(): Promise<void> {
     if (!this.runtimeState) return
     for (const provider of this.runtimeState.providers) {
@@ -332,25 +368,29 @@ export class Agent {
     }
   }
 
-  /** Number of messages in the conversation history (for display). */
+  /** 返回当前对话历史的消息数量。 */
   historyLength(): number {
     return this.history.length
   }
 
+  /** 返回当前可用于工具调用的工具名称列表。 */
   toolNames(): string[] {
     return this.tools.map(t => t.name)
   }
 
+  /** 返回当前活跃技能的 ID 列表。 */
   activeSkillIds(): string[] {
     if (!this.runtimeState) return []
     return this.runtimeState.activeSkills.map(s => s.id)
   }
 
+  /** 中止当前所有正在运行的操作。 */
   abort(): void {
     this.abortController.abort()
   }
 }
 
+// 解析布尔类型的环境变量值
 function parseBooleanEnv(raw: string | undefined, fallback: boolean): boolean {
   if (!raw) return fallback
   const value = raw.trim().toLowerCase()

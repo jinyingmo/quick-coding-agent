@@ -1,3 +1,5 @@
+/** 中文说明：核心 agent 模块。 */
+
 /**
  * Build the agent's system prompt.
  *
@@ -26,6 +28,7 @@ export type BuildSystemPromptParams = {
   extraSections?: string[]
 }
 
+/** 构建 agent 的系统提示词：组合身份、原则、工具目录、编码工作流和记忆模块。 */
 export async function buildSystemPrompt(params: BuildSystemPromptParams): Promise<string> {
   const memorySection = await buildMemoryPrompt(params.memoryDir)
   const agentName = params.agentName ?? 'Codey'

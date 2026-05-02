@@ -48,6 +48,101 @@ npm run repl
 
 默认会使用当前包内的记忆路径 `./memory`。你可以通过 `MEMORY_DIR=...` 覆盖。
 
+### P0 HTTP 服务
+
+这版仓库还提供了一套**单实例、内存态、带审批的 P0 server**，适合内测或本地联调。
+
+启动前先准备一个 API key 身份映射：
+
+```bash
+export P0_API_KEYS='[
+  {
+    "token": "local-dev-token",
+    "userId": "demo-user",
+    "workspaceId": "demo-workspace",
+    "cwd": "/abs/path/to/quick-coding-agent",
+    "memoryDir": "/abs/path/to/quick-coding-agent/packages/agent-tool-call/memory"
+  }
+]'
+```
+
+然后启动服务：
+
+```bash
+pnpm agent:serve
+```
+
+默认端口是 `8787`，也可以覆盖：
+
+```bash
+PORT=8788 pnpm agent:serve
+```
+
+最小调用流程：
+
+1. 创建 session
+
+```bash
+curl -s http://127.0.0.1:8787/sessions \
+  -X POST \
+  -H 'Authorization: Bearer local-dev-token'
+```
+
+2. 发送消息
+
+```bash
+curl -s http://127.0.0.1:8787/sessions/<session-id>/messages \
+  -X POST \
+  -H 'Authorization: Bearer local-dev-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Summarize the testing guidance in memory."}'
+```
+
+3. 显式触发 memory extraction
+
+```bash
+curl -s http://127.0.0.1:8787/sessions/<session-id>/extract-memory \
+  -X POST \
+  -H 'Authorization: Bearer local-dev-token'
+```
+
+### P0 API 概览
+
+| Method | Path | 说明 |
+|---|---|---|
+| `GET` | `/healthz` | 健康检查 |
+| `POST` | `/sessions` | 创建内存 session |
+| `GET` | `/sessions/:id` | 查看 session 元信息 |
+| `DELETE` | `/sessions/:id` | 主动释放 session |
+| `GET` | `/sessions/:id/messages` | 查看当前消息历史 |
+| `POST` | `/sessions/:id/messages` | 发送用户消息 |
+| `POST` | `/sessions/:id/extract-memory` | 显式触发记忆抽取 |
+| `GET` | `/approvals/:id` | 查看审批详情 |
+| `POST` | `/approvals/:id/approve` | 批准审批 |
+| `POST` | `/approvals/:id/reject` | 拒绝审批 |
+
+当服务判定操作有风险时，会返回：
+
+```json
+{
+  "request_id": "req_xxx",
+  "data": {
+    "status": "confirm_required",
+    "approvalId": "apr_xxx",
+    "reason": "Human approval required for shell command"
+  },
+  "error": null
+}
+```
+
+然后可以用下面的接口批准：
+
+```bash
+curl -s http://127.0.0.1:8787/approvals/<approval-id>/approve \
+  -X POST \
+  -H 'Authorization: Bearer local-dev-token'
+```
+
 ### REPL 命令
 
 | 命令 | 作用 |
@@ -252,6 +347,8 @@ await runForkedAgent({
 - **上下文压缩 / 长窗口管理**：只面向短会话。
 - **AutoDream 汇总**：见主项目 `src/services/autoDream/`，模式相同但 prompt 不同。
 - **落盘消息日志**：会话历史当前仅驻留进程内存。
+- **P0 server 无持久化**：进程重启后 session 和 approval 会丢失。
+- **审批不会自动恢复执行现场**：批准后需要由调用方重新发起请求。
 
 ---
 

@@ -1,3 +1,5 @@
+/** 中文说明：工具层模块。 */
+
 /**
  * `read_file` — read a UTF-8 text file from disk.
  *
@@ -5,6 +7,8 @@
  * essentials (no offset/limit, no image handling), but keeps the same shape:
  * a Zod-typed Tool, with isReadOnly = true so the extractor's restricted
  * permission set can allow it unconditionally.
+ *
+ * 中文说明：read_file 工具，从磁盘读取 UTF-8 文本文件，纯只读操作。
  */
 
 import { readFile, stat } from 'fs/promises'
@@ -20,7 +24,9 @@ export const readFileTool: Tool<typeof inputSchema, { content: string; bytes: nu
   description:
     'Read the contents of a UTF-8 text file. Use this before editing a file or before recommending information from a memory file.',
   inputSchema,
+  /** 始终返回 true，仅读取文件内容，无副作用。 */
   isReadOnly: () => true,
+  /** 读取文件内容，先检查是否为普通文件，读取后返回内容与字节数。 */
   async call(input, ctx) {
     try {
       const stats = await stat(input.file_path)

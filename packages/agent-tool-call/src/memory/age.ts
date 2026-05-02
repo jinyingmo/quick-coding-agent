@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * Memory staleness / freshness utilities.
  *
@@ -8,6 +10,8 @@
 const MS_PER_DAY = 86_400_000
 
 /**
+ * 自 mtime 起已过天数，向下取整，负数输入钳为 0。
+ *
  * Days elapsed since mtime. Floor-rounded.
  * Negative inputs clamp to 0.
  */
@@ -16,6 +20,8 @@ export function memoryAgeDays(mtimeMs: number): number {
 }
 
 /**
+ * 人类可读的年龄字符串（today / yesterday / N days ago）。
+ *
  * Human-readable age string.
  */
 export function memoryAge(mtimeMs: number): string {
@@ -26,6 +32,8 @@ export function memoryAge(mtimeMs: number): string {
 }
 
 /**
+ * 超过 1 天的记忆纯文本过期提示。
+ *
  * Plain-text staleness caveat for memories > 1 day old.
  */
 export function memoryFreshnessText(mtimeMs: number): string {
@@ -40,6 +48,8 @@ export function memoryFreshnessText(mtimeMs: number): string {
 }
 
 /**
+ * 单条记忆过期提示，包裹在 <system-reminder> 标签内。
+ *
  * Per-memory staleness note wrapped in <system-reminder> tags.
  */
 export function memoryFreshnessNote(mtimeMs: number): string {

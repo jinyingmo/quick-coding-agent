@@ -1,3 +1,5 @@
+/** 中文说明：工具层模块。 */
+
 /**
  * `grep` — search file contents with a regular expression.
  *
@@ -14,6 +16,8 @@
  * Output modes:
  *  - "content"  (default) — "file:lineNum: text" for each matching line
  *  - "files"    — just the list of files that contain at least one match
+ *
+ * 中文说明：grep 工具，用正则表达式搜索文件内容，纯 Node.js 实现，最多返回 200 条匹配行，自动跳过大型目录。
  */
 
 import { readFile, readdir, stat } from 'fs/promises'
@@ -43,6 +47,8 @@ type Match = { file: string; line: number; text: string }
 /**
  * Search a single file for `pattern`.  Appends up to `limit` matches.
  * Returns true if the file produced at least one match (for files-only mode).
+ *
+ * 中文说明：在单个文件中搜索正则匹配，将匹配行追加到 matches 数组，达到 limit 后停止。返回是否至少有一个匹配。
  */
 async function grepFile(
   filePath: string,
@@ -80,6 +86,8 @@ async function grepFile(
 /**
  * Recursively search a directory, collecting matches.
  * `globExt` is an optional extension filter (e.g. "ts" from "*.ts").
+ *
+ * 中文说明：递归搜索目录收集匹配，globExt 为可选的文件扩展名过滤（如 "ts" 来自 "*.ts"）。
  */
 async function grepDir(
   dir: string,
@@ -99,6 +107,7 @@ async function grepDir(
   names.sort()
 
   await Promise.all(
+    // 并发处理每个目录条目：跳过排除目录，根据 globExt 过滤文件扩展名后搜索匹配。
     names.map(async name => {
       if (matches.length >= limit) return
       if (ALWAYS_SKIP.has(name)) return
@@ -176,7 +185,9 @@ export const grepTool: Tool<typeof inputSchema, Output> = {
     'Automatically excludes node_modules, .git, dist, build, coverage. ' +
     'ALWAYS use this tool for text searches — never invoke grep or rg via bash.',
   inputSchema,
+  /** 始终返回 true，此工具仅读取文件内容，不产生副作用。 */
   isReadOnly: () => true,
+  /** 构造正则表达式，遍历指定路径的文件/目录，收集匹配行或文件列表。 */
   async call(input, ctx) {
     const LIMIT = 200
     const searchPath = input.path ?? ctx.cwd

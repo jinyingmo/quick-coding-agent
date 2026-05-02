@@ -1,3 +1,5 @@
+/** 中文说明：能力提供器模块。 */
+
 import type { Tool } from '../types.js'
 import type { CapabilityProvider, CapabilityProviderContext } from './types.js'
 
@@ -7,6 +9,9 @@ export type CapabilityResolveResult = {
 }
 
 /**
+ * 从所有提供器收集工具列表，单个提供器故障不会阻塞主流程。
+ * 返回去重后的工具列表及错误信息。
+ *
  * Resolve tools from all providers. Provider failures are isolated and surfaced
  * via `errors` so one bad provider does not block the main agent.
  */
@@ -43,6 +48,7 @@ export async function resolveToolsFromProviders(
   return { tools: deduped, errors }
 }
 
+// 按工具名去重，保留首次出现的版本
 function dedupeByName(tools: Tool[]): Tool[] {
   const seen = new Set<string>()
   const out: Tool[] = []

@@ -1,3 +1,5 @@
+/** 中文说明：内置记忆子系统。 */
+
 /**
  * Memory storage core.
  *
@@ -22,6 +24,8 @@ export type MemorySaveParams = {
 }
 
 /**
+ * 保存新的记忆文件（或覆盖已有文件），自动更新 MEMORY.md 索引。
+ *
  * Save a new memory file (or overwrite an existing one).
  * Automatically updates MEMORY.md index.
  */
@@ -39,6 +43,8 @@ export async function saveMemory(params: MemorySaveParams): Promise<void> {
 }
 
 /**
+ * 更新已有记忆文件的正文内容，保留 frontmatter 不变。
+ *
  * Update the body content of an existing memory file, preserving frontmatter.
  */
 export async function updateMemoryContent(
@@ -61,6 +67,8 @@ export async function updateMemoryContent(
 }
 
 /**
+ * 删除记忆文件并从索引中移除。
+ *
  * Delete a memory file and remove it from the index.
  */
 export async function deleteMemory(
@@ -73,6 +81,8 @@ export async function deleteMemory(
 }
 
 /**
+ * 确保记忆目录存在，必要时递归创建。
+ *
  * Ensure the memory directory exists.
  */
 export async function ensureMemoryDirExists(memoryDir: string): Promise<void> {
