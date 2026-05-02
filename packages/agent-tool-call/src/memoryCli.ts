@@ -18,13 +18,13 @@ import {
   ensureMemoryDirExists,
   saveMemory,
   deleteMemory,
-} from './store.js'
-import { scanMemoryFiles, formatMemoryManifest } from './scanner.js'
-import { readEntrypoint } from './indexer.js'
-import { findRelevantMemories, formatRelevantMemories } from './retriever.js'
-import { buildMemoryPrompt } from './prompts.js'
-import { memoryAge, memoryFreshnessNote } from './age.js'
-import { loadConfig, isKimiAvailable } from './config.js'
+} from './memory/store.js'
+import { scanMemoryFiles, formatMemoryManifest } from './memory/scanner.js'
+import { readEntrypoint } from './memory/indexer.js'
+import { findRelevantMemories, formatRelevantMemories } from './memory/retriever.js'
+import { buildMemoryPrompt } from './memory/prompts.js'
+import { memoryAge, memoryFreshnessNote } from './memory/age.js'
+import { loadConfig, isKimiAvailable } from './memory/config.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)

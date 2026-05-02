@@ -18,11 +18,10 @@ import { runScripted } from './scripted.js'
 function parseArgs(argv: string[]): { mode: 'scripted' | 'repl'; memoryDir: string } {
   const args = new Set(argv.slice(2))
   const mode = args.has('--scripted') ? 'scripted' : 'repl'
-  // import.meta.url points at packages/agent-tool-call/dist/cli.js once compiled, so
-  // we go up 2 levels to reach the sibling memory-system package and reuse its
-  // memory directory by default.
+  // import.meta.url points at packages/agent-tool-call/dist/cli.js once compiled.
+  // The bundled sample memory directory now lives inside this package.
   const memoryDir = resolve(
-    process.env.MEMORY_DIR ?? new URL('../../memory-system/memory', import.meta.url).pathname,
+    process.env.MEMORY_DIR ?? new URL('../memory', import.meta.url).pathname,
   )
   return { mode, memoryDir }
 }

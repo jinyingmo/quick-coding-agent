@@ -8,8 +8,8 @@
     "test": "pnpm -r test",
     "agent:demo": "pnpm --filter @quick-coding-agent/agent-tool-call demo",
     "agent:repl": "pnpm --filter @quick-coding-agent/agent-tool-call repl",
-    "memory:demo": "pnpm --filter @quick-coding-agent/memory-system demo",
-    "memory:demo:local": "pnpm --filter @quick-coding-agent/memory-system demo:local"
+    "memory:demo": "pnpm --filter @quick-coding-agent/agent-tool-call memory:demo",
+    "memory:demo:local": "pnpm --filter @quick-coding-agent/agent-tool-call memory:demo:local"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^2.0.0",

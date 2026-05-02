@@ -12,7 +12,7 @@
  */
 
 import { z } from 'zod'
-import { findRelevantMemories } from '@quick-coding-agent/memory-system'
+import { findRelevantMemories } from '../memory/index.js'
 import type { Tool } from '../types.js'
 
 const inputSchema = z.object({

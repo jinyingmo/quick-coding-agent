@@ -12,7 +12,7 @@
  *   5. Memory section (live MEMORY.md index from memory-system demo)
  */
 
-import { buildMemoryPrompt } from '@quick-coding-agent/memory-system'
+import { buildMemoryPrompt } from './memory/index.js'
 import type { Tool } from './types.js'
 
 export type BuildSystemPromptParams = {

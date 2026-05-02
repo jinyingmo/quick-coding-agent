@@ -6,7 +6,7 @@
 2. **带独立权限策略的 Fork 子 Agent**：后台任务（本演示中的记忆抽取）在隔离上下文中运行，继承父级提示缓存，但通过 `CanUseToolFn` 进行沙箱限制。
 3. **Stop hooks**：主循环结束后，以 fire-and-forget 方式执行副作用任务（抽取记忆、自动保存、遥测等），不阻塞用户拿到回答。
 
-它与同级的 [`memory-system`](../memory-system/README.md) 演示联动，复用 `findRelevantMemories`、`buildMemoryPrompt`、`saveMemory` 等能力，因此持久化记忆链路是**端到端真实可运行**的，而非伪造。
+持久化记忆子系统现在已经内置在本包中，直接复用 `src/memory/*` 下的 `findRelevantMemories`、`buildMemoryPrompt`、`saveMemory` 等能力，因此记忆链路是**端到端真实可运行**的，而非伪造。
 
 > **一句话概括：**“Claude Code 的 `query` 循环是什么样？这个仓库把它提炼为约 1.2k 行 TypeScript，你可以在一个下午读透。”
 
@@ -46,7 +46,7 @@ cp .env.example .env
 npm run repl
 ```
 
-默认会使用同级目录的记忆路径 `../memory-system/memory`，因此 agent 保存的记忆会立即出现在 memory-system 演示中。你可以通过 `MEMORY_DIR=...` 或 `--memory-dir <path>`（REPL 参数）覆盖。
+默认会使用当前包内的记忆路径 `./memory`。你可以通过 `MEMORY_DIR=...` 覆盖。
 
 ### REPL 命令
 
@@ -68,7 +68,7 @@ npm run repl
 ```text
 ▶ Scenario 1: main agent searches memory, answers, then extractor fires
   - turn 1: assistant emits search_memory tool_use
-  - search_memory hits the memory-system demo's findRelevantMemories
+  - search_memory hits the built-in memory retriever
   - turn 2: assistant produces final text
   - stop hook → fire-and-forget runForkedAgent('extract_memories')
 
@@ -150,13 +150,14 @@ agent-tool-call/
 │   ├── systemPrompt.ts    # buildSystemPrompt (injects buildMemoryPrompt)
 │   ├── agent.ts           # high-level Agent class with stop-hook wiring
 │   ├── scripted.ts        # offline 3-scenario demo via CannedModel
-│   └── cli.ts             # CLI: --scripted | --repl
+│   ├── cli.ts             # CLI: --scripted | --repl
+│   ├── memoryCli.ts       # memory demo CLI
+│   └── memory/            # built-in memory system modules
+├── memory/                # sample persistent memory directory
 ├── package.json
 ├── tsconfig.json
 └── .env.example
 ```
-
-本包通过 workspace linking 依赖 `@quick-coding-agent/memory-system`。
 
 ---
 
@@ -170,7 +171,7 @@ agent-tool-call/
 | `KIMI_MODEL` | `moonshot-v1-8k` | 需支持 tool-calling |
 | `KIMI_BASE_URL` | `https://api.moonshot.cn/v1` | OpenAI 兼容接口 |
 | `KIMI_TIMEOUT_MS` | `30000` | 单次 LLM 调用超时 |
-| `MEMORY_DIR` | `../memory-system/memory` | 持久化记忆目录 |
+| `MEMORY_DIR` | `./memory` | 持久化记忆目录 |
 | `DEBUG` | （未设置） | 设为 `1` 打印 LLM payload 与工具拒绝日志 |
 | `MCP_SERVERS` | （未设置） | MCP server 配置 JSON 数组（优先于文件） |
 | `MCP_SERVERS_FILE` | （未设置） | 包含 MCP server 数组的 JSON 文件路径 |
@@ -256,7 +257,7 @@ await runForkedAgent({
 
 ## 相关文档
 
-- [`packages/memory-system`](../memory-system/README.md)：本项目使用的持久化记忆子系统。
+- `src/memory/*`：本包内置的持久化记忆子系统实现。
 - 主项目 `src/query.ts`：本演示所对齐的生产查询循环。
 - 主项目 `src/services/extractMemories/`：本演示 `extractMemories.ts` 的原型来源。
 - `IMPLEMENTATION.md`：逐模块深度讲解。

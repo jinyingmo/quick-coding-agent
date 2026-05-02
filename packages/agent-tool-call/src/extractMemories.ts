@@ -27,7 +27,7 @@
 import {
   formatMemoryManifest,
   scanMemoryFiles,
-} from '@quick-coding-agent/memory-system'
+} from './memory/index.js'
 import {
   extractWrittenPaths,
   hasMemoryWritesSince,

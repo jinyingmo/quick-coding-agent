@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { parseFrontmatter, buildMemoryFile, FRONTMATTER_REGEX } from '../src/parser.js'
-import type { FrontmatterData } from '../src/types.js'
+import { parseFrontmatter, buildMemoryFile, FRONTMATTER_REGEX } from '../../src/memory/parser.js'
+import type { FrontmatterData } from '../../src/memory/types.js'
 
 describe('parser', () => {
   describe('FRONTMATTER_REGEX', () => {

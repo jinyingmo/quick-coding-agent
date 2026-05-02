@@ -122,12 +122,12 @@ export type CanUseToolFn = (
 | `read_file` | ✅ | 只读工具一律豁免权限策略 |
 | `write_file` | ❌ | 写工具会被 `restrictToMemoryDirPermission` 拦截 |
 | `list_dir` | ✅ | 多工具并行执行的样例 |
-| `search_memory` | ✅ | **关键**：直接代理 `memory-system` 的 `findRelevantMemories`，把记忆系统真的接进去 |
+| `search_memory` | ✅ | **关键**：直接代理内置 memory 模块的 `findRelevantMemories`，把记忆系统真的接进去 |
 
-`search_memory` 是连接两个 demo 的桥梁：
+`search_memory` 现在直接桥接到本包内置的 memory 子系统：
 
 ```typescript
-import { findRelevantMemories } from '@quick-coding-agent/memory-system'
+import { findRelevantMemories } from '../memory/index.js'
 
 async call(input, ctx) {
   const result = await findRelevantMemories(input.query, ctx.memoryDir, {
@@ -490,7 +490,7 @@ hatch：没有 key 时不调网络，错误信息直接告诉用户怎么修。
 ### 3.8 `systemPrompt.ts` — 把 Memory Prompt 注入主 Prompt
 
 ```typescript
-import { buildMemoryPrompt } from '@quick-coding-agent/memory-system'
+import { buildMemoryPrompt } from './memory/index.js'
 
 export async function buildSystemPrompt(params): Promise<string> {
   const memorySection = await buildMemoryPrompt(params.memoryDir)  // ← 复用记忆系统
@@ -620,8 +620,7 @@ WARN  [scripted_extractor] [extractor]   ↳ DENY write_file: …
 `--repl`（默认）→ readline 循环 + `Agent.chat`，退出前 `await
 agent.drain(10_000)` 给后台一点时间收尾。
 
-`memoryDir` 优先级：`MEMORY_DIR` env > `../memory-system/memory`（默认共
-享 sibling demo 的存储）。
+`memoryDir` 优先级：`MEMORY_DIR` env > `./memory`（默认使用本包内置示例存储）。
 
 ---
 

@@ -1,16 +1,14 @@
 # quick-coding-agent
 
-This repository now uses a pnpm workspace layout to host two related demos:
+This repository now uses a pnpm workspace layout centered on one combined demo:
 
-- `packages/memory-system`: persistent memory core + sample memory files
-- `packages/agent-tool-call`: Claude-Code-style tool-calling agent demo
+- `packages/agent-tool-call`: Claude-Code-style tool-calling agent demo with persistent memory built in
 
 ## Workspace structure
 
 ```text
 quick-coding-agent/
 ├── packages/
-│   ├── memory-system/
 │   └── agent-tool-call/
 ├── package.json
 └── pnpm-workspace.yaml

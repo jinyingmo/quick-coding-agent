@@ -1,7 +1,6 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/memory-system" },
     { "path": "./packages/agent-tool-call" }
   ]
 }

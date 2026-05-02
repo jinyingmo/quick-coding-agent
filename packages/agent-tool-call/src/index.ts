@@ -59,3 +59,6 @@ export { loadSkills } from './skills/loader.js'
 export { extractSkillMentions, selectSkills, buildToolAllowlistFromSkills } from './skills/resolver.js'
 export { buildSkillsPromptSection } from './skills/prompt.js'
 export type { SkillDoc, SkillSelection } from './skills/types.js'
+
+// Memory system
+export * from './memory/index.js'
