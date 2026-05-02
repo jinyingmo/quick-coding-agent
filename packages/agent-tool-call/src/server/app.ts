@@ -9,6 +9,26 @@ import { findIdentityByBearerToken, type ApiKeyIdentity } from '../auth/apiKey.j
 import type { AgentRuntime } from '../runtime/agentRuntime.js'
 import type { Logger } from '../observability/logger.js'
 import { SessionNotFoundError } from '../runtime/errors.js'
+import { RateLimiter } from './rateLimiter.js'
+
+// 全局限流器（每用户）：120 次/分钟（所有端点）；30 条/分钟（发消息）
+const globalLimiter = new RateLimiter({ maxRequests: 120, windowMs: 60_000 })
+const messageLimiter = new RateLimiter({ maxRequests: 30, windowMs: 60_000 })
+
+// 每 5 分钟 GC 一次过期窗口；.unref() 让此定时器不阻止进程退出
+;(setInterval(() => { globalLimiter.gc(); messageLimiter.gc() }, 5 * 60_000) as unknown as { unref(): void }).unref()
+
+const MAX_BODY_BYTES = 1 * 1024 * 1024 // 1 MB
+
+class BodyTooLargeError extends Error {
+  constructor() { super('Request body exceeds 1 MB limit.'); this.name = 'BodyTooLargeError' }
+}
+class BodyParseError extends Error {
+  constructor(cause: unknown) {
+    super(`Invalid JSON: ${(cause as Error)?.message ?? String(cause)}`)
+    this.name = 'BodyParseError'
+  }
+}
 
 export type TLSConfig = {
   /** PEM 格式证书文件路径或证书内容 */
@@ -75,15 +95,26 @@ function sendJson(
   res.end(body)
 }
 
-// 从 HTTP 请求中读取并解析 JSON 请求体
+// 从 HTTP 请求中读取并解析 JSON 请求体，超过大小限制或 JSON 格式错误时抛出具体错误
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
+  let totalBytes = 0
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    totalBytes += buf.byteLength
+    if (totalBytes > MAX_BODY_BYTES) {
+      req.resume() // 排空剩余数据，避免连接挂起
+      throw new BodyTooLargeError()
+    }
+    chunks.push(buf)
   }
   if (chunks.length === 0) return {}
   const raw = Buffer.concat(chunks).toString('utf-8')
-  return JSON.parse(raw) as Record<string, unknown>
+  try {
+    return JSON.parse(raw) as Record<string, unknown>
+  } catch (cause) {
+    throw new BodyParseError(cause)
+  }
 }
 
 // 发送 401 未授权响应
@@ -139,6 +170,16 @@ export function createP0RequestHandler(params: {
       return unauthorized(res, requestId)
     }
 
+    // 全局限流：每用户 120 req/min
+    const globalCheck = globalLimiter.check(identity.userId)
+    if (!globalCheck.allowed) {
+      log.warn('rate_limit_global', { user_id: identity.userId })
+      return sendJson(res, 429, requestId, null,
+        { code: 'RATE_LIMITED', message: 'Too many requests. Please slow down.' },
+        { ...corsHeaders(), 'retry-after': String(globalCheck.retryAfterSecs) },
+      )
+    }
+
     try {
       if (method === 'POST' && url.pathname === '/sessions') {
         const session = params.runtime.createSession({
@@ -177,6 +218,15 @@ export function createP0RequestHandler(params: {
         return sendJson(res, 200, requestId, { messages: params.runtime.getMessages(messagesMatch[1]!) }, null, corsHeaders())
       }
       if (messagesMatch && method === 'POST') {
+        // 消息专属限流：每用户 30 msg/min（消息触发 LLM 调用，成本更高）
+        const msgCheck = messageLimiter.check(identity.userId)
+        if (!msgCheck.allowed) {
+          log.warn('rate_limit_messages', { user_id: identity.userId })
+          return sendJson(res, 429, requestId, null,
+            { code: 'RATE_LIMITED', message: 'Too many messages. Please wait before sending more.' },
+            { ...corsHeaders(), 'retry-after': String(msgCheck.retryAfterSecs) },
+          )
+        }
         const session = params.runtime.getSession(messagesMatch[1]!)
         if (!ensureSessionAccess(identity, session)) {
           return sendJson(res, 403, requestId, null, { code: 'FORBIDDEN', message: 'Session belongs to another workspace.' }, corsHeaders())
@@ -248,11 +298,18 @@ export function createP0RequestHandler(params: {
 
       return sendJson(res, 404, requestId, null, { code: 'NOT_FOUND', message: 'Route not found.' }, corsHeaders())
     } catch (err) {
+      if (err instanceof BodyTooLargeError) {
+        return sendJson(res, 413, requestId, null, { code: 'BODY_TOO_LARGE', message: err.message }, corsHeaders())
+      }
+      if (err instanceof BodyParseError) {
+        return sendJson(res, 400, requestId, null, { code: 'INVALID_JSON', message: err.message }, corsHeaders())
+      }
       if (err instanceof SessionNotFoundError) {
         return sendJson(res, 404, requestId, null, { code: 'SESSION_NOT_FOUND', message: err.message }, corsHeaders())
       }
       log.error('request_failed', { error: (err as Error).message })
-      return sendJson(res, 500, requestId, null, { code: 'INTERNAL_ERROR', message: (err as Error).message }, corsHeaders())
+      // 内部错误不向外暴露细节，避免信息泄露
+      return sendJson(res, 500, requestId, null, { code: 'INTERNAL_ERROR', message: 'An internal error occurred.' }, corsHeaders())
     }
   }
 }

@@ -14,6 +14,9 @@ import { join } from 'path'
 import { z } from 'zod'
 import type { Tool } from '../types.js'
 
+// 单次列目录上限：500 条。超大目录截断并提示，防止撑爆上下文。
+const MAX_ENTRIES = 500
+
 const inputSchema = z.object({
   dir_path: z.string().describe('Absolute directory path to list.'),
 })
@@ -43,12 +46,15 @@ export const listDirTool: Tool<typeof inputSchema, { entries: Entry[] }> = {
         }),
       )
       entries.sort((a, b) => a.name.localeCompare(b.name))
-      const display = entries
+      const truncated = entries.length > MAX_ENTRIES
+      const visible = truncated ? entries.slice(0, MAX_ENTRIES) : entries
+      let display = visible
         .map(e => `${e.kind === 'dir' ? '[d]' : e.kind === 'file' ? '[f]' : '[?]'} ${e.name}`)
         .join('\n')
-      ctx.log(`[list_dir] ${input.dir_path} (${entries.length} entries)`, 'debug')
+      if (truncated) display += `\n\n[Output truncated at ${MAX_ENTRIES} entries (${entries.length} total). Use glob or a more specific path.]`
+      ctx.log(`[list_dir] ${input.dir_path} (${entries.length} entries${truncated ? ', truncated' : ''})`, 'debug')
       return {
-        data: { entries },
+        data: { entries: visible },
         display: display || '(empty directory)',
       }
     } catch (err) {

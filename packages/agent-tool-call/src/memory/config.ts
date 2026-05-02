@@ -3,44 +3,46 @@
 /**
  * Configuration management for the memory system.
  *
- * Reads environment variables for Kimi API integration.
+ * Reads LLM_* environment variables for OpenAI-compatible API integration.
+ * Falls back to legacy KIMI_* variables for backwards compatibility.
  * Supports .env file via dotenv (loaded in cli.ts).
  */
 
 export interface MemoryConfig {
-  /** Kimi API key (from KIMI_API_KEY env var) */
-  kimiApiKey: string | undefined
-  /** Kimi model name (default: moonshot-v1-8k) */
-  kimiModel: string
-  /** Kimi API base URL (default: https://api.moonshot.cn/v1) */
-  kimiBaseUrl: string
+  /** LLM API key (from LLM_API_KEY env var) */
+  llmApiKey: string | undefined
+  /** LLM model name (default: moonshot-v1-8k) */
+  llmModel: string
+  /** LLM API base URL (default: https://api.moonshot.cn/v1) */
+  llmBaseUrl: string
   /** Request timeout in milliseconds (default: 10000) */
-  kimiTimeoutMs: number
+  llmTimeoutMs: number
   /** Default memory directory path */
   memoryDir: string
 }
 
 /**
  * 从环境变量加载记忆系统配置，支持通过 overrides 覆盖。
+ * 优先读取通用的 LLM_* 变量，向后兼容旧的 KIMI_* 变量。
  *
  * Load configuration from environment variables.
  */
 export function loadConfig(overrides?: Partial<MemoryConfig>): MemoryConfig {
   return {
-    kimiApiKey: process.env.KIMI_API_KEY,
-    kimiModel: process.env.KIMI_MODEL ?? 'moonshot-v1-8k',
-    kimiBaseUrl: process.env.KIMI_BASE_URL ?? 'https://api.moonshot.cn/v1',
-    kimiTimeoutMs: parseInt(process.env.KIMI_TIMEOUT_MS ?? '10000', 10),
+    llmApiKey: process.env.LLM_API_KEY ?? process.env.KIMI_API_KEY,
+    llmModel: process.env.LLM_MODEL ?? process.env.KIMI_MODEL ?? 'moonshot-v1-8k',
+    llmBaseUrl: process.env.LLM_BASE_URL ?? process.env.KIMI_BASE_URL ?? 'https://api.moonshot.cn/v1',
+    llmTimeoutMs: parseInt(process.env.LLM_TIMEOUT_MS ?? process.env.KIMI_TIMEOUT_MS ?? '10000', 10),
     memoryDir: process.env.MEMORY_DIR ?? './memory',
     ...overrides,
   }
 }
 
 /**
- * 检查 Kimi API 是否已配置且可用（有 API Key）。
+ * 检查 LLM API 是否已配置且可用（有 API Key）。
  *
- * Check if Kimi API is configured and available.
+ * Check if LLM API is configured and available.
  */
-export function isKimiAvailable(config: MemoryConfig): boolean {
-  return !!config.kimiApiKey && config.kimiApiKey.length > 0
+export function isLLMAvailable(config: MemoryConfig): boolean {
+  return !!config.llmApiKey && config.llmApiKey.length > 0
 }

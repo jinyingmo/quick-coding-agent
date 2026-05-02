@@ -1,9 +1,9 @@
 /** 中文说明：内置记忆子系统。 */
 
 /**
- * Kimi (Moonshot AI) API client for memory relevance selection.
+ * OpenAI-compatible LLM client for memory relevance selection.
  *
- * Provides a side-query style interface that calls the Kimi API
+ * Provides a side-query style interface that calls any OpenAI-compatible API
  * to semantically select the most relevant memories for a user query.
  *
  * Compatible with OpenAI-style API format:
@@ -14,13 +14,13 @@ import type { MemoryConfig } from './config.js'
 import type { MemoryHeader } from './types.js'
 import { formatMemoryManifest } from './scanner.js'
 
-export type KimiSelectResult = {
+export type LLMSelectResult = {
   selected: string[]
   fromCache: boolean
   model: string
 }
 
-export type KimiSelectOptions = {
+export type LLMSelectOptions = {
   config: MemoryConfig
   signal?: AbortSignal
   recentTools?: string[]
@@ -38,23 +38,23 @@ Rules:
 `
 
 /**
- * 调用 Kimi API 为查询选择最相关的记忆文件，失败时返回 null 以优雅降级。
+ * 调用 LLM API 为查询选择最相关的记忆文件，失败时返回 null 以优雅降级。
  *
- * Call Kimi API to select relevant memories for a query.
+ * Call LLM API to select relevant memories for a query.
  *
  * @param query 用户查询文本
  * @param memories 可用记忆文件头信息列表
  * @param options 配置与可选 AbortSignal
  * @returns 选中的文件名列表，调用失败返回 null
  */
-export async function callKimiSelectMemories(
+export async function callLLMSelectMemories(
   query: string,
   memories: MemoryHeader[],
-  options: KimiSelectOptions,
-): Promise<KimiSelectResult | null> {
+  options: LLMSelectOptions,
+): Promise<LLMSelectResult | null> {
   const { config, signal, recentTools } = options
 
-  if (!config.kimiApiKey) {
+  if (!config.llmApiKey) {
     return null
   }
 
@@ -68,7 +68,7 @@ export async function callKimiSelectMemories(
   const userContent = `Query: ${query}\n\nAvailable memories:\n${manifest}${toolsSection}`
 
   const requestBody = {
-    model: config.kimiModel,
+    model: config.llmModel,
     messages: [
       { role: 'system', content: SELECT_MEMORIES_SYSTEM_PROMPT },
       { role: 'user', content: userContent },
@@ -77,11 +77,11 @@ export async function callKimiSelectMemories(
     max_tokens: 256,
   }
 
-  const url = `${config.kimiBaseUrl}/chat/completions`
+  const url = `${config.llmBaseUrl}/chat/completions`
 
   try {
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), config.kimiTimeoutMs)
+    const timeoutId = setTimeout(() => controller.abort(), config.llmTimeoutMs)
 
     // Link external signal if provided
     if (signal) {
@@ -92,7 +92,7 @@ export async function callKimiSelectMemories(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.kimiApiKey}`,
+        Authorization: `Bearer ${config.llmApiKey}`,
       },
       body: JSON.stringify(requestBody),
       signal: controller.signal,
@@ -102,7 +102,7 @@ export async function callKimiSelectMemories(
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'unknown error')
-      throw new Error(`Kimi API ${response.status}: ${errorText}`)
+      throw new Error(`LLM API ${response.status}: ${errorText}`)
     }
 
     const data = (await response.json()) as {
@@ -113,7 +113,7 @@ export async function callKimiSelectMemories(
 
     const content = data.choices?.[0]?.message?.content
     if (!content) {
-      throw new Error('Kimi API returned empty content')
+      throw new Error('LLM API returned empty content')
     }
 
     // Parse JSON from the response
@@ -126,7 +126,7 @@ export async function callKimiSelectMemories(
       if (jsonMatch && jsonMatch[1]) {
         parsed = JSON.parse(jsonMatch[1].trim()) as { selected_memories?: string[] }
       } else {
-        throw new Error('Failed to parse JSON from Kimi response')
+        throw new Error('Failed to parse JSON from LLM response')
       }
     }
 
@@ -137,7 +137,7 @@ export async function callKimiSelectMemories(
     return {
       selected,
       fromCache: false,
-      model: config.kimiModel,
+      model: config.llmModel,
     }
   } catch (err) {
     if (signal?.aborted) {
@@ -145,7 +145,7 @@ export async function callKimiSelectMemories(
     }
     // Log error but return null for graceful degradation
     if (process.env.DEBUG) {
-      console.error('[kimi] select memories failed:', err)
+      console.error('[llm] select memories failed:', err)
     }
     return null
   }

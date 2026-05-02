@@ -12,8 +12,8 @@ import { readFile } from 'fs/promises'
 import type { MemoryHeader } from './types.js'
 import { scanMemoryFiles, formatMemoryManifest } from './scanner.js'
 import { memoryFreshnessNote } from './age.js'
-import { callKimiSelectMemories } from './llm.js'
-import { loadConfig, isKimiAvailable, type MemoryConfig } from './config.js'
+import { callLLMSelectMemories } from './llm.js'
+import { loadConfig, isLLMAvailable, type MemoryConfig } from './config.js'
 
 export type RelevantMemory = {
   path: string
@@ -77,8 +77,8 @@ export async function findRelevantMemories(
   }
 
   // Phase 1: Try LLM selection if enabled and configured
-  if (useLLM && isKimiAvailable(config)) {
-    const llmResult = await callKimiSelectMemories(query, memories, {
+  if (useLLM && isLLMAvailable(config)) {
+    const llmResult = await callLLMSelectMemories(query, memories, {
       config,
       signal,
       recentTools,

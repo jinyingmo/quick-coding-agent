@@ -11,7 +11,7 @@
  *   - The extractor's permission policy (forked agent's denied non-memory writes)
  *   - The "main agent already wrote → extractor skips" mutual-exclusion path
  *
- * No KIMI_API_KEY required.
+ * No LLM_API_KEY required.
  */
 
 import { resolve } from 'path'
@@ -280,6 +280,7 @@ export async function runScripted(memoryDir: string): Promise<void> {
   console.log('\n▶ Scenario 3: runQueryLoop without an API key — graceful error path\n')
 
   try {
+    delete process.env.LLM_API_KEY
     delete process.env.KIMI_API_KEY
     await runQueryLoop({
       systemPrompt: '(no-key system prompt)',

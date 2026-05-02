@@ -16,13 +16,23 @@
  * 中文说明：bash 工具，在 agent 工作目录中执行 Shell 命令并返回 stdout/stderr 和退出码。
  */
 
-import { exec } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { z } from 'zod'
 import type { Tool } from '../types.js'
 
-/** 将 child_process.exec 包装为返回 Promise 的版本，方便 async/await 使用。 */
-const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
+
+// 匹配常见敏感环境变量名的正则，防止 API 密钥等凭证泄漏给子进程
+const SENSITIVE_ENV_RE = /(?:API_KEY|API_SECRET|ACCESS_TOKEN|SECRET_KEY|PRIVATE_KEY|PASSWORD|_KEYS)$/i
+
+function buildSafeEnv(): NodeJS.ProcessEnv {
+  const safe: NodeJS.ProcessEnv = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (!SENSITIVE_ENV_RE.test(k)) safe[k] = v
+  }
+  return safe
+}
 
 const inputSchema = z.object({
   command: z
@@ -53,12 +63,13 @@ export const bashTool: Tool<typeof inputSchema, Output> = {
     ctx.log(`[bash] ${input.command}`, 'info')
 
     try {
-      const { stdout, stderr } = await execAsync(input.command, {
+      // execFile 将命令作为 argv[0] 传给 bash，避免二次 shell 解析；
+      // buildSafeEnv() 过滤敏感凭证，防止 API key 泄漏给子进程
+      const { stdout, stderr } = await execFileAsync('/bin/bash', ['-c', input.command], {
         cwd: ctx.cwd,
-        shell: '/bin/bash',
         timeout: timeoutMs,
         maxBuffer: 10 * 1024 * 1024, // 10 MB
-        env: { ...process.env },
+        env: buildSafeEnv(),
       })
 
       const display = [

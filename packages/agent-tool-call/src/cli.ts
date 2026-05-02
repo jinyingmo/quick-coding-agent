@@ -39,19 +39,20 @@ async function main() {
   }
 
   // REPL mode
-  if (!process.env.KIMI_API_KEY) {
-    console.error('\n[!] KIMI_API_KEY is not set — cannot run --repl.')
+  if (!process.env.LLM_API_KEY && !process.env.KIMI_API_KEY) {
+    console.error('\n[!] LLM_API_KEY is not set — cannot run --repl.')
     console.error('    Either:')
     console.error('      • cp .env.example .env  and add your key, or')
     console.error('      • npm run demo  (scripted mode, no key needed)\n')
     process.exit(1)
   }
 
+  const model = process.env.LLM_MODEL ?? process.env.KIMI_MODEL ?? 'moonshot-v1-8k'
   console.log('\n╭──────────────────────────────────────────────────────────╮')
-  console.log('│  Codey REPL — Kimi-powered agent with persistent memory │')
+  console.log('│  Codey REPL — LLM-powered agent with persistent memory  │')
   console.log('├──────────────────────────────────────────────────────────┤')
   console.log(`│  memoryDir : ${memoryDir.padEnd(43)}│`)
-  console.log(`│  model     : ${(process.env.KIMI_MODEL ?? 'moonshot-v1-8k').padEnd(43)}│`)
+  console.log(`│  model     : ${model.padEnd(43)}│`)
   console.log('│  commands  : /quit /history /reload /memory /tools      │')
   console.log('│             /skills                                      │')
   console.log('╰──────────────────────────────────────────────────────────╯\n')

@@ -15,6 +15,9 @@ import { readFile, stat } from 'fs/promises'
 import { z } from 'zod'
 import type { Tool } from '../types.js'
 
+// 单次读取上限：100 KB 字符。超出时截断并附加说明，防止超大文件撑爆上下文。
+const MAX_READ_CHARS = 100 * 1024
+
 const inputSchema = z.object({
   file_path: z.string().describe('Absolute path to the file to read.'),
 })
@@ -37,11 +40,19 @@ export const readFileTool: Tool<typeof inputSchema, { content: string; bytes: nu
           isError: true,
         }
       }
-      const content = await readFile(input.file_path, 'utf-8')
-      ctx.log(`[read_file] ${input.file_path} (${content.length} chars)`, 'debug')
+      let content = await readFile(input.file_path, 'utf-8')
+      let truncated = false
+      if (content.length > MAX_READ_CHARS) {
+        content = content.slice(0, MAX_READ_CHARS)
+        truncated = true
+      }
+      ctx.log(`[read_file] ${input.file_path} (${content.length} chars${truncated ? ', truncated' : ''})`, 'debug')
+      const display = truncated
+        ? `${content}\n\n[Output truncated at ${MAX_READ_CHARS} chars. Use offset/limit or target a specific section.]`
+        : content
       return {
         data: { content, bytes: content.length },
-        display: content,
+        display,
       }
     } catch (err) {
       const msg = (err as Error).message

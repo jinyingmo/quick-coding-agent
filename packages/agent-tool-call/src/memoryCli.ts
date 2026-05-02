@@ -26,7 +26,7 @@ import { readEntrypoint } from './memory/indexer.js'
 import { findRelevantMemories, formatRelevantMemories } from './memory/retriever.js'
 import { buildMemoryPrompt } from './memory/prompts.js'
 import { memoryAge, memoryFreshnessNote } from './memory/age.js'
-import { loadConfig, isKimiAvailable } from './memory/config.js'
+import { loadConfig, isLLMAvailable } from './memory/config.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -121,9 +121,9 @@ async function demoRetrieve(useLLM: boolean): Promise<void> {
   heading('4. FIND RELEVANT MEMORIES')
 
   const config = loadConfig()
-  const llmStatus = isKimiAvailable(config)
-    ? c('green', 'Kimi API available')
-    : c('yellow', 'Kimi API unavailable — will use local fallback')
+  const llmStatus = isLLMAvailable(config)
+    ? c('green', 'LLM API available')
+    : c('yellow', 'LLM API unavailable — will use local fallback')
 
   console.log(c('dim', `LLM status: ${llmStatus}`))
   console.log(c('dim', `Mode: ${useLLM ? 'LLM semantic selection' : 'Local keyword scoring'}\n`))
@@ -175,12 +175,12 @@ async function demoCompareEngines(): Promise<void> {
   heading('4b. LLM vs LOCAL COMPARISON')
 
   const config = loadConfig()
-  if (!isKimiAvailable(config)) {
+  if (!isLLMAvailable(config)) {
     console.log(
-      c('yellow', '  Skipping comparison — Kimi API key not configured.\n'),
+      c('yellow', '  Skipping comparison — LLM API key not configured.\n'),
     )
     console.log(
-      c('dim', '  Set KIMI_API_KEY in your environment to enable LLM retrieval.'),
+      c('dim', '  Set LLM_API_KEY in your environment to enable LLM retrieval.'),
     )
     return
   }
@@ -350,16 +350,16 @@ async function main(): Promise<void> {
   console.log()
 
   // Show config status
-  if (isKimiAvailable(config)) {
+  if (isLLMAvailable(config)) {
     console.log(
-      c('green', `✓ Kimi API configured (model: ${config.kimiModel})`),
+      c('green', `✓ LLM API configured (model: ${config.llmModel})`),
     )
   } else {
     console.log(
-      c('yellow', '⚠ Kimi API not configured — using local keyword fallback'),
+      c('yellow', '⚠ LLM API not configured — using local keyword fallback'),
     )
     console.log(
-      c('dim', '  Set KIMI_API_KEY to enable semantic memory retrieval.'),
+      c('dim', '  Set LLM_API_KEY to enable semantic memory retrieval.'),
     )
   }
   if (noLLM) {

@@ -34,8 +34,8 @@ export { buildMemoryPrompt } from './prompts.js'
 
 export { memoryAgeDays, memoryAge, memoryFreshnessText, memoryFreshnessNote } from './age.js'
 
-export { loadConfig, isKimiAvailable } from './config.js'
+export { loadConfig, isLLMAvailable } from './config.js'
 export type { MemoryConfig } from './config.js'
 
-export { callKimiSelectMemories } from './llm.js'
-export type { KimiSelectResult, KimiSelectOptions } from './llm.js'
+export { callLLMSelectMemories } from './llm.js'
+export type { LLMSelectResult, LLMSelectOptions } from './llm.js'

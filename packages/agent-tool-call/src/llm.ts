@@ -26,6 +26,35 @@ import type {
 import { createAssistantMessage } from './types.js'
 
 // ────────────────────────────────────────────────────────────────────────────
+// Retry helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+// 遇到限流或服务端错误时重试；客户端错误（4xx 除 429）不重试
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
+const MAX_RETRIES = 3
+const RETRY_BASE_MS = 1_000
+const RETRY_MAX_MS = 30_000
+
+function retryDelayMs(attempt: number, retryAfterHeader: string | null): number {
+  if (retryAfterHeader) {
+    const s = parseInt(retryAfterHeader, 10)
+    if (!isNaN(s) && s > 0) return Math.min(s * 1000, RETRY_MAX_MS)
+  }
+  // 指数退避 + ±20% 随机抖动，防止惊群效应
+  const base = RETRY_BASE_MS * 2 ** attempt
+  const jitter = base * 0.2 * (Math.random() * 2 - 1)
+  return Math.min(base + jitter, RETRY_MAX_MS)
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new Error('aborted')); return }
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('aborted')) }, { once: true })
+  })
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Config
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -37,12 +66,13 @@ export type LLMConfig = {
 }
 
 // 从环境变量加载 LLM 配置（API Key、模型名称、基础 URL、超时时间）
+// 优先读取通用的 LLM_* 变量，向后兼容旧的 KIMI_* 变量
 export function loadLLMConfig(): LLMConfig {
   return {
-    apiKey: process.env.KIMI_API_KEY,
-    model: process.env.KIMI_MODEL ?? 'moonshot-v1-8k',
-    baseUrl: process.env.KIMI_BASE_URL ?? 'https://api.moonshot.cn/v1',
-    timeoutMs: parseInt(process.env.KIMI_TIMEOUT_MS ?? '30000', 10),
+    apiKey: process.env.LLM_API_KEY ?? process.env.KIMI_API_KEY,
+    model: process.env.LLM_MODEL ?? process.env.KIMI_MODEL ?? 'moonshot-v1-8k',
+    baseUrl: process.env.LLM_BASE_URL ?? process.env.KIMI_BASE_URL ?? 'https://api.moonshot.cn/v1',
+    timeoutMs: parseInt(process.env.LLM_TIMEOUT_MS ?? process.env.KIMI_TIMEOUT_MS ?? '30000', 10),
   }
 }
 
@@ -198,12 +228,12 @@ export type LLMCallOptions = {
  * The caller (queryLoop) decides whether to terminate (no tool_use blocks)
  * or to dispatch the tool calls and run another iteration.
  */
-/** 调用 LLM 一次，返回完整的 AssistantMessage（调用者 queryLoop 决定是否终止或继续下一轮）。 */
+/** 调用 LLM，遇到限流或服务端错误时自动重试（最多 3 次，指数退避）。 */
 export async function callLLM(opts: LLMCallOptions): Promise<AssistantMessage> {
   const cfg = opts.config ?? loadLLMConfig()
   if (!cfg.apiKey) {
     throw new Error(
-      'KIMI_API_KEY is not set — start the demo in --scripted mode or configure your .env',
+      'LLM_API_KEY is not set — start the demo in --scripted mode or configure your .env',
     )
   }
 
@@ -224,87 +254,99 @@ export async function callLLM(opts: LLMCallOptions): Promise<AssistantMessage> {
     temperature: 0.2,
   }
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), cfg.timeoutMs)
-  if (opts.signal) {
-    opts.signal.addEventListener('abort', () => controller.abort())
-  }
-
   if (process.env.DEBUG) {
-    console.error('[llm] request body:', JSON.stringify(body, null, 2))
+    console.error('[llm] request', { model: body.model, messages: body.messages.length, tools: tools.length })
   }
 
-  let response: Response
-  try {
-    response = await fetch(`${cfg.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    })
-  } finally {
-    clearTimeout(timeout)
-  }
+  let lastError: Error = new Error('LLM call failed after retries')
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => '<no body>')
-    throw new Error(`Kimi API ${response.status}: ${text}`)
-  }
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (opts.signal?.aborted) throw new Error('Aborted')
 
-  const json = (await response.json()) as {
-    choices?: Array<{
-      message?: {
-        content?: string | null
-        tool_calls?: OpenAIToolCall[]
+    // 每次 attempt 独立创建 AbortController，避免超时状态污染重试
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), cfg.timeoutMs)
+    opts.signal?.addEventListener('abort', () => controller.abort(), { once: true })
+
+    let response: Response
+    try {
+      response = await fetch(`${cfg.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${cfg.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+    } catch (err) {
+      clearTimeout(timeout)
+      lastError = err as Error
+      if (attempt < MAX_RETRIES && !opts.signal?.aborted) {
+        await sleep(retryDelayMs(attempt, null), opts.signal)
+        continue
       }
-      finish_reason?: string
-    }>
-  }
-
-  const choice = json.choices?.[0]
-  const msg = choice?.message
-  if (!msg) {
-    throw new Error('Kimi API returned no choices/message')
-  }
-
-  if (process.env.DEBUG) {
-    console.error('[llm] response:', JSON.stringify(json, null, 2))
-  }
-
-  const blocks: ContentBlock[] = []
-  if (msg.content) {
-    blocks.push({ type: 'text', text: msg.content })
-  }
-  if (msg.tool_calls && msg.tool_calls.length > 0) {
-    for (const call of msg.tool_calls) {
-      let parsed: Record<string, unknown> = {}
-      try {
-        parsed = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>
-      } catch {
-        parsed = { __raw: call.function.arguments }
-      }
-      const block: ToolUseBlock = {
-        type: 'tool_use',
-        id: call.id,
-        name: call.function.name,
-        input: parsed,
-      }
-      blocks.push(block)
+      throw lastError
     }
+    clearTimeout(timeout)
+
+    if (!response.ok) {
+      if (RETRYABLE_STATUS.has(response.status) && attempt < MAX_RETRIES && !opts.signal?.aborted) {
+        const retryAfter = response.headers.get('retry-after')
+        const delay = retryDelayMs(attempt, retryAfter)
+        if (process.env.DEBUG) {
+          console.error(`[llm] HTTP ${response.status}, retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`)
+        }
+        await sleep(delay, opts.signal)
+        continue
+      }
+      const text = await response.text().catch(() => '<no body>')
+      throw new Error(`LLM API ${response.status}: ${text}`)
+    }
+
+    const json = (await response.json()) as {
+      choices?: Array<{
+        message?: {
+          content?: string | null
+          tool_calls?: OpenAIToolCall[]
+        }
+        finish_reason?: string
+      }>
+    }
+
+    const choice = json.choices?.[0]
+    const msg = choice?.message
+    if (!msg) throw new Error('LLM API returned no choices/message')
+
+    if (process.env.DEBUG) {
+      console.error('[llm] response', {
+        finish_reason: choice?.finish_reason,
+        content_len: msg.content?.length ?? 0,
+        tool_calls: msg.tool_calls?.length ?? 0,
+      })
+    }
+
+    const blocks: ContentBlock[] = []
+    if (msg.content) blocks.push({ type: 'text', text: msg.content })
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      for (const call of msg.tool_calls) {
+        let parsed: Record<string, unknown> = {}
+        try {
+          parsed = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>
+        } catch {
+          parsed = { __raw: call.function.arguments }
+        }
+        blocks.push({ type: 'tool_use', id: call.id, name: call.function.name, input: parsed } satisfies ToolUseBlock)
+      }
+    }
+    if (blocks.length === 0) blocks.push({ type: 'text', text: '' })
+
+    const stopReason: AssistantMessage['stopReason'] =
+      msg.tool_calls && msg.tool_calls.length > 0 ? 'tool_use' : 'end_turn'
+    return createAssistantMessage(blocks, stopReason)
   }
 
-  // If the model returned literally nothing (e.g. an upstream filter), fall
-  // back to a single empty text block so the queryLoop has a stable shape.
-  if (blocks.length === 0) {
-    blocks.push({ type: 'text', text: '' })
-  }
-
-  const stopReason: AssistantMessage['stopReason'] =
-    msg.tool_calls && msg.tool_calls.length > 0 ? 'tool_use' : 'end_turn'
-  return createAssistantMessage(blocks, stopReason)
+  throw lastError
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -385,7 +427,7 @@ export async function* callLLMStream(opts: LLMCallOptions): AsyncGenerator<LLMSt
   const cfg = opts.config ?? loadLLMConfig()
   if (!cfg.apiKey) {
     throw new Error(
-      'KIMI_API_KEY is not set — start the demo in --scripted mode or configure your .env',
+      'LLM_API_KEY is not set — start the demo in --scripted mode or configure your .env',
     )
   }
 
@@ -431,7 +473,7 @@ export async function* callLLMStream(opts: LLMCallOptions): AsyncGenerator<LLMSt
 
   if (!response.ok) {
     const text = await response.text().catch(() => '<no body>')
-    throw new Error(`Kimi API ${response.status}: ${text}`)
+    throw new Error(`LLM API ${response.status}: ${text}`)
   }
 
   // 拼接增量内容
