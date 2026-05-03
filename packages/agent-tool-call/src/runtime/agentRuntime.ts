@@ -6,7 +6,6 @@ import type { ApprovalRegistry } from './approvalRegistry.js'
 import type { SessionRegistry } from './sessionRegistry.js'
 import type { PendingApproval } from './approvalRegistry.js'
 import type { Message } from '../types.js'
-import type { LLMStreamChunk } from '../llm.js'
 import { createSessionPolicyCanUseTool } from '../policy/engine.js'
 
 export type StreamChunk = {
@@ -72,6 +71,20 @@ export function createAgentRuntime(params: {
     return agent
   }
 
+  function syncActiveApprovalIds(sessionId: string): string[] {
+    const session = params.sessionRegistry.require(sessionId)
+    const staleIds = session.activeApprovalIds.filter(id => {
+      const approval = params.approvalRegistry.get(id)
+      return !approval || approval.status !== 'pending'
+    })
+
+    for (const approvalId of staleIds) {
+      params.sessionRegistry.removeApproval(sessionId, approvalId)
+    }
+
+    return params.sessionRegistry.require(sessionId).activeApprovalIds
+  }
+
   return {
     // 创建新会话并初始化 Agent 实例
     createSession(input) {
@@ -114,7 +127,7 @@ export function createAgentRuntime(params: {
         cwd: session.cwd,
         memoryDir: session.memoryDir,
         messageCount: session.messages.length,
-        activeApprovalIds: [...session.activeApprovalIds],
+        activeApprovalIds: [...syncActiveApprovalIds(sessionId)],
       }
     },
 
@@ -171,12 +184,26 @@ export function createAgentRuntime(params: {
 
     // 流式发送消息：逐步 yield LLM 增量块
     async *sendMessageStream(input) {
-      const session = params.sessionRegistry.require(input.sessionId)
       const agent = getAgent(input.sessionId)
 
       try {
-        for await (const chunk of agent.streamChat(input.text)) {
+        const gen = agent.streamChat(input.text)
+        let result
+        while (true) {
+          const { value, done } = await gen.next()
+          if (done) {
+            result = value
+            break
+          }
+          if (value.type === 'confirm_required') {
+            params.sessionRegistry.addApproval(input.sessionId, value.approvalId)
+          }
+          const chunk = value
           yield { type: chunk.type, payload: chunk as unknown as Record<string, unknown> }
+        }
+
+        if (result?.status === 'confirm_required' && result.approvalRequest) {
+          params.sessionRegistry.addApproval(input.sessionId, result.approvalRequest.id)
         }
       } finally {
         params.sessionRegistry.replaceMessages(input.sessionId, agent.historySnapshot())

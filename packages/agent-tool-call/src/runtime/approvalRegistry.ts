@@ -49,7 +49,7 @@ export type ApprovalRegistry = {
   get(id: string): PendingApproval | undefined
   approve(id: string, reviewerId: string): ApprovalDecisionResult
   reject(id: string, reviewerId: string): ApprovalDecisionResult
-  expireStale(now?: number): number
+  expireStale(now?: number): { count: number; approvalIds: string[] }
   listBySession(sessionId: string): PendingApproval[]
   delete(id: string): void
 }
@@ -135,15 +135,17 @@ export function createApprovalRegistry(): ApprovalRegistry {
     },
 
     // 批量标记所有过期的待审批请求，返回过期数量
-    expireStale(now = nowTs()): number {
+    expireStale(now = nowTs()): { count: number; approvalIds: string[] } {
       let expiredCount = 0
+      const approvalIds: string[] = []
       for (const approval of approvals.values()) {
         if (approval.status === 'pending' && approval.expiresAt <= now) {
           approval.status = 'expired'
           expiredCount++
+          approvalIds.push(approval.id)
         }
       }
-      return expiredCount
+      return { count: expiredCount, approvalIds }
     },
 
     // 列出指定会话的所有审批，按创建时间降序

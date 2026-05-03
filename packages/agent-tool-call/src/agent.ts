@@ -2,8 +2,14 @@
 
 import { delimiter, resolve } from 'path'
 import { allowAllPermission } from './permissions.js'
-import { runQueryLoop, type QueryResult, type StopHookFn } from './query.js'
-import { callLLMStream, type LLMStreamChunk, type TokenUsage } from './llm.js'
+import {
+  runQueryLoop,
+  runQueryLoopStream,
+  type QueryResult,
+  type QueryStreamChunk,
+  type StopHookFn,
+} from './query.js'
+import { type TokenUsage } from './llm.js'
 import {
   initExtractMemories,
   type ExtractMemoriesController,
@@ -316,6 +322,7 @@ export class Agent {
     while (this.history.length < result.messages.length) {
       this.history.push(result.messages[this.history.length]!)
     }
+    this.lastUsage = result.usage
 
     return result
   }
@@ -330,10 +337,9 @@ export class Agent {
   }
 
   /**
-   * 流式聊天：逐步 yield LLM 响应块。
+   * 流式聊天：逐步 yield 响应块，同时保持与非流式模式一致的工具循环语义。
    *
    * 适用于需要实时展示输出文本的场景（如 SSE / WebSocket 推送）。
-   * 注意：流式模式下不支持工具调用循环，如需工具调用请使用非流式 `chat()`。
    *
    * @example
    *   for await (const chunk of agent.streamChat('Hello')) {
@@ -341,47 +347,49 @@ export class Agent {
    *   }
    *   console.log('Tokens:', agent.lastUsage)
    */
-  async *streamChat(userInput: string): AsyncGenerator<LLMStreamChunk, void> {
+  async *streamChat(
+    userInput: string,
+  ): AsyncGenerator<QueryStreamChunk, QueryResult> {
     const skillChanged = await this.applySkillMentions(userInput)
     if (!this.systemPrompt || skillChanged) {
       await this.refreshSystemPrompt()
     }
 
     this.history.push(createUserMessage(userInput))
+    const ctx = this.buildContext()
 
-    try {
-      const gen = callLLMStream({
-        systemPrompt: this.systemPrompt!,
-        history: this.history,
-        tools: this.tools,
-        signal: this.currentAbortController.signal,
-      })
+    const stopHooks: StopHookFn[] = this.autoExtractMemories
+      ? [async ({ messages, context }) => {
+          void this.extractor.run(messages, context)
+        }]
+      : []
 
-      let result
-      while (true) {
-        const { value, done } = await gen.next()
-        if (done) {
-          result = value
-          break
-        }
-        yield value
-      }
+    const gen = runQueryLoopStream({
+      systemPrompt: this.systemPrompt!,
+      messages: this.history,
+      tools: this.tools,
+      canUseTool: this.canUseTool,
+      context: ctx,
+      maxTurns: this.opts.maxTurns ?? 10,
+      stopHooks,
+    })
 
-      if (result) {
-        this.lastUsage = result.usage
-        this.history.push(result.assistant)
+    let result: QueryResult
+    while (true) {
+      const { value, done } = await gen.next()
+      if (done) {
+        result = value
+        break
       }
-    } catch (err) {
-      const errorMsg = `LLM stream error: ${(err as Error).message}`
-      this.log(errorMsg, 'error')
-      const errorMessage: Message = {
-        type: 'assistant',
-        uuid: crypto.randomUUID(),
-        content: [{ type: 'text', text: errorMsg }],
-        stopReason: 'error',
-      }
-      this.history.push(errorMessage)
+      yield value
     }
+
+    while (this.history.length < result.messages.length) {
+      this.history.push(result.messages[this.history.length]!)
+    }
+    this.lastUsage = result.usage
+
+    return result
   }
 
   /** 立即触发记忆提取并等待完成，返回本次保存的记忆文件路径。 */

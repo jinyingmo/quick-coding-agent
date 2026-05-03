@@ -40,8 +40,9 @@ describe('approvalRegistry', () => {
       ttlMs: 10,
     })
 
-    const count = registry.expireStale(approval.createdAt + 20)
-    expect(count).toBe(1)
+    const result = registry.expireStale(approval.createdAt + 20)
+    expect(result.count).toBe(1)
+    expect(result.approvalIds).toEqual([approval.id])
     expect(registry.get(approval.id)?.status).toBe('expired')
   })
 })

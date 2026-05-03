@@ -19,6 +19,7 @@ export type SessionRegistry = {
   touch(sessionId: string): void
   addApproval(sessionId: string, approvalId: string): void
   removeApproval(sessionId: string, approvalId: string): void
+  removeApprovalReferences(approvalIds: string[]): number
   delete(sessionId: string): boolean
   sweep(now?: number): SweepResult
   size(): number
@@ -169,6 +170,22 @@ export function createSessionRegistry(
         id => id !== approvalId,
       )
       session.lastAccessAt = nowTs()
+    },
+
+    // 从所有会话中批量移除审批引用，返回移除数量
+    removeApprovalReferences(approvalIds: string[]): number {
+      if (approvalIds.length === 0) return 0
+      const toRemove = new Set(approvalIds)
+      let removed = 0
+      for (const session of sessions.values()) {
+        const next = session.activeApprovalIds.filter(id => !toRemove.has(id))
+        removed += session.activeApprovalIds.length - next.length
+        if (next.length !== session.activeApprovalIds.length) {
+          session.activeApprovalIds = next
+          session.lastAccessAt = nowTs()
+        }
+      }
+      return removed
     },
 
     // 删除会话，返回是否实际删除

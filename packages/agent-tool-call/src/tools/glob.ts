@@ -21,59 +21,17 @@ import { readdir, stat } from 'fs/promises'
 import { join, relative } from 'path'
 import { z } from 'zod'
 import type { Tool } from '../types.js'
-
-// ────────────────────────────────────────────────────────────────────────────
-// Glob → RegExp compiler
-// ────────────────────────────────────────────────────────────────────────────
-
-/** Directories that are always excluded from glob results. */
-const ALWAYS_SKIP = new Set([
-  'node_modules',
-  '.git',
-  '.svn',
-  'dist',
-  'build',
-  '.next',
-  'coverage',
-  '__pycache__',
-  '.venv',
-  'venv',
-])
-
-/**
- * Convert a glob pattern string to a RegExp that matches relative posix paths.
- * Only handles `**`, `*`, and `?` — sufficient for the tool's documented use.
- *
- * 中文说明：将 glob 模式字符串转换为匹配相对 POSIX 路径的正则表达式，仅支持 **、* 和 ?。
- */
-function globToRegExp(pattern: string): RegExp {
-  let re = ''
-  let i = 0
-  while (i < pattern.length) {
-    if (pattern[i] === '*' && pattern[i + 1] === '*') {
-      // ** matches zero or more path segments (including slashes)
-      re += '.*'
-      i += 2
-      // consume optional separator after **
-      if (pattern[i] === '/') i++
-    } else if (pattern[i] === '*') {
-      // * matches anything except a path separator
-      re += '[^/]*'
-      i++
-    } else if (pattern[i] === '?') {
-      re += '[^/]'
-      i++
-    } else if ('.+^${}()|[]\\'.includes(pattern[i]!)) {
-      // escape regex meta-characters
-      re += '\\' + pattern[i]
-      i++
-    } else {
-      re += pattern[i]
-      i++
-    }
-  }
-  return new RegExp(`^${re}$`)
-}
+import {
+  ALWAYS_SKIP,
+  DEFAULT_TRAVERSAL_CONCURRENCY,
+  createConcurrencyLimiter,
+  createIgnoreMatcher,
+  globPatternToRegExp,
+  mapWithConcurrencyLimit,
+  toPosixPath,
+  type ConcurrencyLimiter,
+  type IgnoreMatcher,
+} from './fsTraversal.js'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Recursive traversal
@@ -86,12 +44,14 @@ async function walk(
   re: RegExp,
   results: string[],
   limit: number,
+  ignoreMatcher: IgnoreMatcher,
+  limiter: ConcurrencyLimiter,
 ): Promise<void> {
   if (results.length >= limit) return
 
   let names: string[]
   try {
-    names = await readdir(dir)
+    names = await limiter.run(() => readdir(dir))
   } catch {
     return
   }
@@ -99,32 +59,34 @@ async function walk(
   // Sort for deterministic output
   names.sort()
 
-  await Promise.all(
-    // 并发处理每个目录条目：跳过排除目录，递归进入子目录或检查文件是否匹配。
-    names.map(async name => {
+  await mapWithConcurrencyLimit(
+    names,
+    DEFAULT_TRAVERSAL_CONCURRENCY,
+    async name => {
       if (results.length >= limit) return
       if (ALWAYS_SKIP.has(name)) return
 
       const fullPath = join(dir, name)
       let s
       try {
-        s = await stat(fullPath)
+        s = await limiter.run(() => stat(fullPath))
       } catch {
         return
       }
 
-      const relPath = relative(rootDir, fullPath)
-
       if (s.isDirectory()) {
-        await walk(fullPath, rootDir, re, results, limit)
+        if (await ignoreMatcher.shouldIgnore(fullPath, 'dir')) return
+        await walk(fullPath, rootDir, re, results, limit, ignoreMatcher, limiter)
       } else if (s.isFile()) {
+        if (await ignoreMatcher.shouldIgnore(fullPath, 'file')) return
         // Test both the relative path and just the filename, so patterns like
         // "*.ts" match files regardless of depth when combined with ** prefix.
-        if (re.test(relPath) || re.test(name)) {
+        const relPath = toPosixPath(relative(rootDir, fullPath))
+        if (results.length < limit && (re.test(relPath) || re.test(name))) {
           results.push(fullPath)
         }
       }
-    }),
+    },
   )
 }
 
@@ -156,6 +118,7 @@ export const globTool: Tool<typeof inputSchema, Output> = {
     'Returns up to 100 matching absolute paths sorted alphabetically. ' +
     'Use ** for recursive directory matching. ' +
     'Automatically excludes node_modules, .git, dist, build, .next, and coverage directories. ' +
+    'Respects .gitignore and .ignore files while traversing directories. ' +
     'When you need to find files by name pattern, prefer this over bash + find.',
   inputSchema,
   /** 始终返回 true，此工具仅读取文件系统，不产生副作用。 */
@@ -167,7 +130,7 @@ export const globTool: Tool<typeof inputSchema, Output> = {
 
     let re: RegExp
     try {
-      re = globToRegExp(input.pattern)
+      re = globPatternToRegExp(input.pattern)
     } catch (err) {
       return {
         data: { files: [], count: 0, truncated: false },
@@ -176,8 +139,11 @@ export const globTool: Tool<typeof inputSchema, Output> = {
       }
     }
 
+    const limiter = createConcurrencyLimiter(DEFAULT_TRAVERSAL_CONCURRENCY)
+    const ignoreMatcher = createIgnoreMatcher(searchDir, limiter)
     const results: string[] = []
-    await walk(searchDir, searchDir, re, results, LIMIT)
+    await walk(searchDir, searchDir, re, results, LIMIT, ignoreMatcher, limiter)
+    results.sort((a, b) => a.localeCompare(b))
 
     const truncated = results.length >= LIMIT
     const display =

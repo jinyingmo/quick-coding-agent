@@ -8,7 +8,7 @@
  * the `rg` binary.  Trade-offs relative to ripgrep:
  *
  *  - Slower on very large repos (no mmap, no parallelism).
- *  - Does not honour .gitignore.
+ *  - Uses a lightweight .gitignore / .ignore matcher instead of Git's full ruleset.
  *  - Hard limit of 200 matching lines prevents context overflow.
  *
  * The same "always skip" set used by GlobTool is applied here.
@@ -24,19 +24,15 @@ import { readFile, readdir, stat } from 'fs/promises'
 import { join } from 'path'
 import { z } from 'zod'
 import type { Tool } from '../types.js'
-
-const ALWAYS_SKIP = new Set([
-  'node_modules',
-  '.git',
-  '.svn',
-  'dist',
-  'build',
-  '.next',
-  'coverage',
-  '__pycache__',
-  '.venv',
-  'venv',
-])
+import {
+  ALWAYS_SKIP,
+  DEFAULT_TRAVERSAL_CONCURRENCY,
+  createConcurrencyLimiter,
+  createIgnoreMatcher,
+  mapWithConcurrencyLimit,
+  type ConcurrencyLimiter,
+  type IgnoreMatcher,
+} from './fsTraversal.js'
 
 type Match = { file: string; line: number; text: string }
 
@@ -55,26 +51,24 @@ async function grepFile(
   pattern: RegExp,
   matches: Match[],
   limit: number,
+  limiter: ConcurrencyLimiter,
 ): Promise<boolean> {
   if (matches.length >= limit) return false
 
   let text: string
   try {
-    text = await readFile(filePath, 'utf-8')
+    text = await limiter.run(() => readFile(filePath, 'utf-8'))
   } catch {
     return false // binary or unreadable — skip silently
   }
 
   // Quick check before splitting lines
   if (!pattern.test(text)) return false
-  // Reset lastIndex after the global flag test
-  pattern.lastIndex = 0
 
   let found = false
   const lines = text.split('\n')
   for (let i = 0; i < lines.length; i++) {
     if (matches.length >= limit) break
-    pattern.lastIndex = 0
     if (pattern.test(lines[i]!)) {
       matches.push({ file: filePath, line: i + 1, text: lines[i]! })
       found = true
@@ -95,42 +89,55 @@ async function grepDir(
   globExt: string | undefined,
   matches: Match[],
   limit: number,
+  ignoreMatcher: IgnoreMatcher,
+  limiter: ConcurrencyLimiter,
 ): Promise<void> {
   if (matches.length >= limit) return
 
   let names: string[]
   try {
-    names = await readdir(dir)
+    names = await limiter.run(() => readdir(dir))
   } catch {
     return
   }
   names.sort()
 
-  await Promise.all(
-    // 并发处理每个目录条目：跳过排除目录，根据 globExt 过滤文件扩展名后搜索匹配。
-    names.map(async name => {
+  await mapWithConcurrencyLimit(
+    names,
+    DEFAULT_TRAVERSAL_CONCURRENCY,
+    async name => {
       if (matches.length >= limit) return
       if (ALWAYS_SKIP.has(name)) return
 
       const fullPath = join(dir, name)
       let s
       try {
-        s = await stat(fullPath)
+        s = await limiter.run(() => stat(fullPath))
       } catch {
         return
       }
 
       if (s.isDirectory()) {
-        await grepDir(fullPath, pattern, globExt, matches, limit)
+        if (await ignoreMatcher.shouldIgnore(fullPath, 'dir')) return
+        await grepDir(
+          fullPath,
+          pattern,
+          globExt,
+          matches,
+          limit,
+          ignoreMatcher,
+          limiter,
+        )
       } else if (s.isFile()) {
+        if (await ignoreMatcher.shouldIgnore(fullPath, 'file')) return
         // Extension filter (from glob parameter)
         if (globExt) {
           const ext = name.includes('.') ? name.split('.').pop() : ''
           if (ext !== globExt) return
         }
-        await grepFile(fullPath, pattern, matches, limit)
+        await grepFile(fullPath, pattern, matches, limit, limiter)
       }
-    }),
+    },
   )
 }
 
@@ -183,6 +190,7 @@ export const grepTool: Tool<typeof inputSchema, Output> = {
     'Use glob to filter by file type (e.g. "*.ts"). ' +
     'Use output_mode="files" to get only the list of matching file paths. ' +
     'Automatically excludes node_modules, .git, dist, build, coverage. ' +
+    'Respects .gitignore and .ignore files while traversing directories. ' +
     'ALWAYS use this tool for text searches — never invoke grep or rg via bash.',
   inputSchema,
   /** 始终返回 true，此工具仅读取文件内容，不产生副作用。 */
@@ -194,7 +202,7 @@ export const grepTool: Tool<typeof inputSchema, Output> = {
     const outputMode = input.output_mode ?? 'content'
 
     // Build regex
-    const flags = 'g' + (input.case_insensitive ? 'i' : '')
+    const flags = input.case_insensitive ? 'i' : ''
     let pattern: RegExp
     try {
       pattern = new RegExp(input.pattern, flags)
@@ -211,6 +219,8 @@ export const grepTool: Tool<typeof inputSchema, Output> = {
       ? input.glob.replace(/^.*\*\./, '').replace(/[^a-zA-Z0-9].*$/, '') || undefined
       : undefined
 
+    const limiter = createConcurrencyLimiter(DEFAULT_TRAVERSAL_CONCURRENCY)
+    const ignoreMatcher = createIgnoreMatcher(searchPath, limiter)
     const matches: Match[] = []
 
     let s
@@ -225,10 +235,23 @@ export const grepTool: Tool<typeof inputSchema, Output> = {
     }
 
     if (s.isFile()) {
-      await grepFile(searchPath, pattern, matches, LIMIT)
+      await grepFile(searchPath, pattern, matches, LIMIT, limiter)
     } else {
-      await grepDir(searchPath, pattern, globExt, matches, LIMIT)
+      await grepDir(
+        searchPath,
+        pattern,
+        globExt,
+        matches,
+        LIMIT,
+        ignoreMatcher,
+        limiter,
+      )
     }
+
+    matches.sort((a, b) => {
+      if (a.file !== b.file) return a.file.localeCompare(b.file)
+      return a.line - b.line
+    })
 
     const truncated = matches.length >= LIMIT
     const filesMatched = [...new Set(matches.map(m => m.file))]

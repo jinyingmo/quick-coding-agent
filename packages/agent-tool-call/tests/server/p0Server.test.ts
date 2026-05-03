@@ -57,6 +57,23 @@ function makeRuntime(): AgentRuntime {
       }
       return { status: 'completed' as const, reply: 'ok' }
     },
+    async *sendMessageStream(input) {
+      if (input.text.includes('install')) {
+        yield {
+          type: 'confirm_required',
+          payload: {
+            type: 'confirm_required',
+            approvalId: 'apr-1',
+            reason: 'Needs approval',
+            toolName: 'bash',
+            toolUseId: 'tool-1',
+          },
+        }
+        return
+      }
+      yield { type: 'text_delta', payload: { type: 'text_delta', text: 'ok' } }
+      yield { type: 'done', payload: { type: 'done', finishReason: 'end_turn' } }
+    },
     async extractMemories() {
       return { status: 'completed' as const, savedCount: 0 }
     },

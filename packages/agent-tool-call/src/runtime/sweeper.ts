@@ -13,8 +13,11 @@ export function startRuntimeSweeper(params: {
   const interval = setInterval(() => {
     const sessions = params.sessionRegistry.sweep()
     const expiredApprovals = params.approvalRegistry.expireStale()
+    const removedApprovalRefs = params.sessionRegistry.removeApprovalReferences(
+      expiredApprovals.approvalIds,
+    )
     params.log?.(
-      `[runtime-sweeper] expiredSessions=${sessions.expiredSessions.length} evictedSessions=${sessions.evictedSessions.length} expiredApprovals=${expiredApprovals}`,
+      `[runtime-sweeper] expiredSessions=${sessions.expiredSessions.length} evictedSessions=${sessions.evictedSessions.length} expiredApprovals=${expiredApprovals.count} removedApprovalRefs=${removedApprovalRefs}`,
     )
   }, params.intervalMs ?? 60_000)
   interval.unref()
