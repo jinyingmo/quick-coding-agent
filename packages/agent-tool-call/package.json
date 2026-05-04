@@ -3,11 +3,25 @@
   "version": "1.0.0",
   "description": "Simplified Claude-Code-style agent with tool calling and built-in persistent memory demo",
   "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
   "scripts": {
     "build": "tsup",
     "start": "npm run build && node dist/cli.js",
     "demo": "npm run build && node dist/cli.js --scripted",
-    "repl": "npm run build && node dist/cli.js --repl",
     "serve": "npm run build && node dist/serverCli.js",
     "memory:demo": "npm run build && node dist/memoryCli.js --demo",
     "memory:demo:local": "npm run build && node dist/memoryCli.js --demo --no-llm",

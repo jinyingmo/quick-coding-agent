@@ -1,2 +1,3 @@
 packages:
   - "packages/agent-tool-call"
+  - "packages/agent-cli"

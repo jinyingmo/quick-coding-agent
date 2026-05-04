@@ -24,6 +24,9 @@ export {
 } from './types.js'
 
 export { Agent } from './agent.js'
+export type { AgentOptions } from './agent.js'
+export { ConversationSession } from './session.js'
+export type { SessionDeps, SessionOptions } from './session.js'
 export { runQueryLoop } from './query.js'
 export { ALL_TOOLS, findToolByName } from './tools/index.js'
 export { runForkedAgent, extractWrittenPaths, hasMemoryWritesSince } from './forkedAgent.js'

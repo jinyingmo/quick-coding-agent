@@ -1,38 +1,28 @@
-/** 中文说明：核心 agent 模块。 */
-
 import { delimiter, resolve } from 'path'
 import { allowAllPermission } from './permissions.js'
 import {
-  runQueryLoop,
-  runQueryLoopStream,
   type QueryResult,
   type QueryStreamChunk,
-  type StopHookFn,
 } from './query.js'
 import { type TokenUsage } from './llm.js'
-import {
-  initExtractMemories,
-  type ExtractMemoriesController,
-} from './extractMemories.js'
 import { buildSystemPrompt } from './systemPrompt.js'
 import type { CanUseToolFn, Message, Tool, ToolUseContext } from './types.js'
-import { createUserMessage, getText } from './types.js'
 import { createLocalToolsProvider } from './capabilities/localProvider.js'
-import {
-  resolveToolsFromProviders,
-  type CapabilityResolveResult,
-} from './capabilities/resolveTools.js'
+import { resolveToolsFromProviders } from './capabilities/resolveTools.js'
 import type { CapabilityProvider } from './capabilities/types.js'
 import { createMCPProvider } from './mcp/provider.js'
 import { loadMCPSettingsFromEnv, type MCPSettings } from './mcp/config.js'
 import { loadSkills } from './skills/loader.js'
-import {
-  buildToolAllowlistFromSkills,
-  extractSkillMentions,
-  selectSkills,
-} from './skills/resolver.js'
+import { buildToolAllowlistFromSkills, selectSkills } from './skills/resolver.js'
 import { buildSkillsPromptSection } from './skills/prompt.js'
 import type { SkillDoc } from './skills/types.js'
+import {
+  ConversationSession,
+  type SessionDeps,
+  type SessionOptions,
+} from './session.js'
+
+export type { SessionOptions }
 
 export type SkillRuntimeOptions = {
   roots?: string[]
@@ -62,26 +52,42 @@ type RuntimeState = {
   strictSkillToolAllowlist: boolean
 }
 
-/** Agent 类：封装 agent 运行时核心逻辑，包括会话管理、工具调度、技能系统和记忆提取。 */
+/**
+ * Agent 类：持有共享只读基础设施，并作为 ConversationSession 的工厂。
+ *
+ * ## 并发模型
+ *
+ * Agent 内部所有可变状态均为"初始化一次、之后只读"：
+ *   - runtimeState   — providers、availableSkills（initRuntime 后不再变更）
+ *   - allToolsCache  — 工具列表，单次 Promise 懒加载后永久缓存
+ *
+ * getCapabilitiesForSkills() 是纯计算（基于上述缓存），可被任意数量的
+ * ConversationSession 并发调用，无需任何锁。
+ *
+ * 每条独立对话请使用 agent.createSession() 创建 ConversationSession，
+ * 会话状态（history、activeSkills、abortController、extractor）完全隔离。
+ */
 export class Agent {
   readonly opts: AgentOptions
-  private tools: Tool[] = []
-  private readonly extractor: ExtractMemoriesController
-  private readonly history: Message[] = []
-  private systemPrompt: string | undefined
-  private currentAbortController = new AbortController()
   private readonly log: NonNullable<AgentOptions['log']>
   private readonly runtimeWarnings: string[] = []
   private readonly canUseTool: CanUseToolFn
   private readonly autoExtractMemories: boolean
-  private lastSavedMemoryPaths: string[] = []
-  /** 上次 LLM 调用的 Token 用量（流式模式填充） */
-  public lastUsage: TokenUsage | undefined
 
   private runtimeState: RuntimeState | undefined
   private runtimeInitPromise: Promise<void> | undefined
 
-  // 构造 Agent 实例，初始化日志记录器、权限函数和记忆提取器
+  // 工具列表单次懒加载：并发调用共享同一个 Promise，解析后永久缓存
+  private allToolsPromise: Promise<Tool[]> | undefined
+  // fix ①: 同步供 toolNames() 使用的缓存副本，需在 refresh/dispose 时清理
+  private cachedAllTools: Tool[] = []
+
+  // agent 级 AbortController，用于工具解析等基础设施操作
+  private readonly agentAbortController = new AbortController()
+
+  // fix ④: 改为惰性初始化，仅在向后兼容 API 被调用时创建
+  private _defaultSession: ConversationSession | undefined
+
   constructor(opts: AgentOptions) {
     this.opts = opts
     this.log =
@@ -93,17 +99,123 @@ export class Agent {
       })
     this.canUseTool = opts.canUseTool ?? allowAllPermission
     this.autoExtractMemories = opts.autoExtractMemories ?? true
-    this.extractor = initExtractMemories({
-      memoryDir: opts.memoryDir,
-      turnsPerExtraction: opts.turnsPerExtraction ?? 1,
-      onSaved: paths => {
-        this.lastSavedMemoryPaths = [...paths]
-        opts.onMemoriesSaved?.(paths)
+  }
+
+  // fix ④: lazy getter，只在向后兼容方法被调用时才创建默认 session
+  private get defaultSession(): ConversationSession {
+    return (this._defaultSession ??= new ConversationSession(this.buildSessionDeps()))
+  }
+
+  // ─── 会话工厂 ──────────────────────────────────────────────────────────────
+
+  /**
+   * 创建一个独立的对话会话。多个会话可在同一 Agent 上完全并发运行。
+   *
+   * **生命周期约束**：session 通过闭包持有对本 Agent 基础设施的引用。
+   * 调用 agent.drain() 处置 providers 后，所有由本 Agent 创建的 session
+   * 均不应再被调用——后续工具解析调用将对已关闭的连接发起请求。
+   */
+  createSession(opts?: SessionOptions): ConversationSession {
+    return new ConversationSession(this.buildSessionDeps(), opts)
+  }
+
+  private buildSessionDeps(): SessionDeps {
+    return {
+      cwd: this.opts.cwd,
+      memoryDir: this.opts.memoryDir,
+      log: this.log,
+      canUseTool: this.canUseTool,
+      maxTurns: this.opts.maxTurns ?? 10,
+      autoExtractMemories: this.autoExtractMemories,
+      turnsPerExtraction: this.opts.turnsPerExtraction ?? 1,
+      onMemoriesSaved: this.opts.onMemoriesSaved,
+      getAvailableSkills: async () => {
+        await this.ensureRuntimeInitialized()
+        return this.runtimeState!.availableSkills
       },
+      getDefaultActiveSkills: async () => {
+        await this.ensureRuntimeInitialized()
+        return this.runtimeState!.activeSkills
+      },
+      getCapabilitiesForSkills: skills => this.getCapabilitiesForSkills(skills),
+    }
+  }
+
+  // ─── 共享基础设施 ───────────────────────────────────────────────────────────
+
+  /**
+   * 为指定的活跃技能集合解析工具列表和 systemPrompt。
+   * 基于缓存的工具列表做纯计算，可被多个 Session 并发调用。
+   */
+  private async getCapabilitiesForSkills(
+    activeSkills: SkillDoc[],
+  ): Promise<{ tools: Tool[]; systemPrompt: string }> {
+    await this.ensureRuntimeInitialized()
+    const allTools = await this.resolveAllTools()
+    const tools = this.applySkillToolPolicy(allTools, activeSkills)
+    const skillsSection = buildSkillsPromptSection(activeSkills)
+
+    const systemPrompt = await buildSystemPrompt({
+      memoryDir: this.opts.memoryDir,
+      tools,
+      agentName: this.opts.agentName,
+      cwd: this.opts.cwd,
+      extraSections: skillsSection ? [skillsSection] : undefined,
+    })
+
+    this.log(
+      `[agent] capabilities resolved: tools=${tools.length}/${allTools.length}, skills=${activeSkills.length}`,
+      'debug',
+    )
+    return { tools, systemPrompt }
+  }
+
+  // 工具列表懒加载：首次调用发起 I/O，并发调用共享同一 Promise
+  private async resolveAllTools(): Promise<Tool[]> {
+    if (!this.allToolsPromise) {
+      this.allToolsPromise = this.doResolveAllTools()
+    }
+    return this.allToolsPromise
+  }
+
+  private async doResolveAllTools(): Promise<Tool[]> {
+    const resolved = await resolveToolsFromProviders(this.runtimeState!.providers, {
+      cwd: this.opts.cwd,
+      memoryDir: this.opts.memoryDir,
+      log: this.log,
+      signal: this.agentAbortController.signal,
+    })
+    if (resolved.errors.length > 0) {
+      for (const err of resolved.errors) {
+        this.log(err, 'warn')
+      }
+    }
+    this.cachedAllTools = resolved.tools
+    this.log(`[agent] tools resolved: ${resolved.tools.length} tools`, 'info')
+    return resolved.tools
+  }
+
+  private applySkillToolPolicy(tools: Tool[], activeSkills: SkillDoc[]): Tool[] {
+    const state = this.runtimeState
+    if (!state) return tools
+
+    const allowlist = buildToolAllowlistFromSkills(activeSkills)
+    if (!state.strictSkillToolAllowlist || allowlist.size === 0) {
+      return tools
+    }
+
+    return tools.filter(tool => {
+      if (allowlist.has(tool.name)) return true
+      const originalName = tool.metadata?.originalName
+      if (originalName && allowlist.has(originalName)) return true
+      const server = tool.metadata?.server
+      if (server && originalName && allowlist.has(`mcp:${server}:${originalName}`)) return true
+      return false
     })
   }
 
-  // 确保运行时已初始化（懒加载，单次执行）
+  // ─── 运行时初始化 ───────────────────────────────────────────────────────────
+
   private async ensureRuntimeInitialized(): Promise<void> {
     if (this.runtimeState) return
     if (!this.runtimeInitPromise) {
@@ -112,7 +224,6 @@ export class Agent {
     await this.runtimeInitPromise
   }
 
-  // 初始化运行时环境：加载本地工具提供商、MCP 服务和技能
   private async initRuntime(): Promise<void> {
     const providers: CapabilityProvider[] = [createLocalToolsProvider()]
 
@@ -122,10 +233,12 @@ export class Agent {
 
     const mcpSettings = this.opts.mcpSettings ?? (await loadMCPSettingsFromEnv())
     if (mcpSettings.enabled && mcpSettings.servers.length > 0) {
-      providers.push(createMCPProvider({
-        servers: mcpSettings.servers,
-        allowTools: mcpSettings.allowedTools,
-      }))
+      providers.push(
+        createMCPProvider({
+          servers: mcpSettings.servers,
+          allowTools: mcpSettings.allowedTools,
+        }),
+      )
       this.log(
         `[agent] mcp enabled: ${mcpSettings.servers.length} server(s) configured`,
         'info',
@@ -169,258 +282,122 @@ export class Agent {
     }
   }
 
-  // 解析技能目录根路径（支持显式传入或从环境变量读取）
   private resolveSkillRoots(explicit?: string[]): string[] {
-    if (explicit && explicit.length > 0) return explicit.map(p => resolve(p))
+    if (explicit && explicit.length > 0) return explicit.map((p: string) => resolve(p))
     const raw = process.env.SKILL_ROOTS?.trim()
     if (!raw) return []
     return raw
       .split(delimiter)
-      .map(p => p.trim())
+      .map((p: string) => p.trim())
       .filter(Boolean)
-      .map(p => resolve(p))
+      .map((p: string) => resolve(p))
   }
 
-  // 解析默认技能 ID 列表（支持显式传入或从环境变量 SKILLS 读取）
   private resolveDefaultSkillIds(explicit?: string[]): string[] {
     if (explicit && explicit.length > 0) return explicit
     const raw = process.env.SKILLS?.trim()
     if (!raw) return []
     return raw
       .split(',')
-      .map(x => x.trim())
+      .map((x: string) => x.trim())
       .filter(Boolean)
   }
 
-  // 刷新工具和能力列表，并应用技能工具策略
-  private async refreshCapabilities(): Promise<CapabilityResolveResult> {
-    await this.ensureRuntimeInitialized()
-    const state = this.runtimeState!
+  // ─── 向后兼容 API（代理到默认 session）──────────────────────────────────────
 
-    const resolved = await resolveToolsFromProviders(state.providers, {
-      cwd: this.opts.cwd,
-      memoryDir: this.opts.memoryDir,
-      log: this.log,
-      signal: this.currentAbortController.signal,
-    })
-
-    this.tools = this.applySkillToolPolicy(resolved.tools)
-    this.log(
-      `[agent] active tools: ${this.tools.length}/${resolved.tools.length} after skill policy`,
-      'info',
-    )
-
-    return resolved
+  /** 上次 LLM 调用的 Token 用量（默认 session）。 */
+  get lastUsage(): TokenUsage | undefined {
+    return this.defaultSession.lastUsage
   }
 
-  // 根据当前活跃技能的工具白名单过滤工具列表
-  private applySkillToolPolicy(tools: Tool[]): Tool[] {
-    const state = this.runtimeState
-    if (!state) return tools
-
-    const allowlist = buildToolAllowlistFromSkills(state.activeSkills)
-    if (!state.strictSkillToolAllowlist || allowlist.size === 0) {
-      return tools
-    }
-
-    return tools.filter(tool => {
-      if (allowlist.has(tool.name)) return true
-      const originalName = tool.metadata?.originalName
-      if (originalName && allowlist.has(originalName)) return true
-      const server = tool.metadata?.server
-      if (server && originalName && allowlist.has(`mcp:${server}:${originalName}`)) return true
-      return false
-    })
-  }
-
-  // 检测用户输入中的技能 @mention 并动态激活对应技能
-  private async applySkillMentions(userInput: string): Promise<boolean> {
-    await this.ensureRuntimeInitialized()
-    const state = this.runtimeState!
-
-    const mentioned = extractSkillMentions(userInput)
-    if (mentioned.length === 0) return false
-
-    const selection = selectSkills({
-      available: state.availableSkills,
-      requestedIds: mentioned,
-    })
-
-    if (selection.unknownRequested.length > 0) {
-      this.log(
-        `[skills] unknown skill mentions: ${selection.unknownRequested.join(', ')}`,
-        'warn',
-      )
-    }
-
-    const previous = new Set(state.activeSkills.map(s => s.id))
-    const next = new Set(selection.active.map(s => s.id))
-    if (previous.size === next.size && [...previous].every(id => next.has(id))) {
-      return false
-    }
-
-    state.activeSkills = selection.active
-    this.log(
-      `[skills] active skills updated: ${state.activeSkills.map(s => s.id).join(', ') || '(none)'}`,
-      'info',
-    )
-    return true
-  }
-
-  /** 重建系统提示词，包含最新的工具列表、技能和记忆文件。 */
-  async refreshSystemPrompt(): Promise<void> {
-    await this.refreshCapabilities()
-    await this.ensureRuntimeInitialized()
-
-    const skillsSection = buildSkillsPromptSection(this.runtimeState!.activeSkills)
-
-    this.systemPrompt = await buildSystemPrompt({
-      memoryDir: this.opts.memoryDir,
-      tools: this.tools,
-      agentName: this.opts.agentName,
-      cwd: this.opts.cwd,
-      extraSections: skillsSection ? [skillsSection] : undefined,
-    })
-  }
-
-  // 构建工具调用的上下文对象
-  private buildContext(): ToolUseContext {
-    return {
-      cwd: this.opts.cwd,
-      memoryDir: this.opts.memoryDir,
-      log: this.log,
-      signal: this.currentAbortController.signal,
-    }
-  }
-
-  /** 执行一个完整的对话轮次：处理技能、刷新提示词、运行查询循环。 */
+  /** 执行一个完整的对话轮次（默认 session）。 */
   async executeTurn(userInput: string): Promise<QueryResult> {
-    const skillChanged = await this.applySkillMentions(userInput)
-    if (!this.systemPrompt || skillChanged) {
-      await this.refreshSystemPrompt()
-    }
-
-    this.history.push(createUserMessage(userInput))
-    const ctx = this.buildContext()
-
-    const stopHooks: StopHookFn[] = this.autoExtractMemories
-      ? [async ({ messages, context }) => {
-          void this.extractor.run(messages, context)
-        }]
-      : []
-
-    const result = await runQueryLoop({
-      systemPrompt: this.systemPrompt!,
-      messages: this.history,
-      tools: this.tools,
-      canUseTool: this.canUseTool,
-      context: ctx,
-      maxTurns: this.opts.maxTurns ?? 10,
-      stopHooks,
-    })
-
-    while (this.history.length < result.messages.length) {
-      this.history.push(result.messages[this.history.length]!)
-    }
-    this.lastUsage = result.usage
-
-    return result
+    return this.defaultSession.executeTurn(userInput)
   }
 
-  /** 向 agent 发送聊天消息并返回文本回复。 */
+  /** 向 agent 发送聊天消息并返回文本回复（默认 session）。 */
   async chat(userInput: string): Promise<string> {
-    const result = await this.executeTurn(userInput)
-    if (result.status === 'confirm_required') {
-      throw new Error(`Human approval required: ${result.reason ?? 'This action requires review.'}`)
-    }
-    return result.finalMessage ? getText(result.finalMessage) : ''
+    return this.defaultSession.chat(userInput)
   }
 
-  /**
-   * 流式聊天：逐步 yield 响应块，同时保持与非流式模式一致的工具循环语义。
-   *
-   * 适用于需要实时展示输出文本的场景（如 SSE / WebSocket 推送）。
-   *
-   * @example
-   *   for await (const chunk of agent.streamChat('Hello')) {
-   *     if (chunk.type === 'text_delta') process.stdout.write(chunk.text)
-   *   }
-   *   console.log('Tokens:', agent.lastUsage)
-   */
+  /** 流式聊天（默认 session）。 */
   async *streamChat(
     userInput: string,
   ): AsyncGenerator<QueryStreamChunk, QueryResult> {
-    const skillChanged = await this.applySkillMentions(userInput)
-    if (!this.systemPrompt || skillChanged) {
-      await this.refreshSystemPrompt()
-    }
-
-    this.history.push(createUserMessage(userInput))
-    const ctx = this.buildContext()
-
-    const stopHooks: StopHookFn[] = this.autoExtractMemories
-      ? [async ({ messages, context }) => {
-          void this.extractor.run(messages, context)
-        }]
-      : []
-
-    const gen = runQueryLoopStream({
-      systemPrompt: this.systemPrompt!,
-      messages: this.history,
-      tools: this.tools,
-      canUseTool: this.canUseTool,
-      context: ctx,
-      maxTurns: this.opts.maxTurns ?? 10,
-      stopHooks,
-    })
-
-    let result: QueryResult
-    while (true) {
-      const { value, done } = await gen.next()
-      if (done) {
-        result = value
-        break
+    const gen = this.defaultSession.streamChat(userInput)
+    // fix ②: 消除 result 变量和非空断言，与 session.ts 保持一致
+    for (;;) {
+      const step = await gen.next()
+      if (step.done) {
+        return step.value
       }
-      yield value
+      yield step.value
     }
-
-    while (this.history.length < result.messages.length) {
-      this.history.push(result.messages[this.history.length]!)
-    }
-    this.lastUsage = result.usage
-
-    return result
   }
 
-  /** 立即触发记忆提取并等待完成，返回本次保存的记忆文件路径。 */
+  /**
+   * 强制重新解析工具列表和 systemPrompt。
+   * 下次任意 session 调用 executeTurn/streamChat 时将重新构建能力快照。
+   * fix ①: 同步清理 cachedAllTools，避免 toolNames() 返回过期数据
+   */
+  async refreshSystemPrompt(): Promise<void> {
+    this.allToolsPromise = undefined
+    this.cachedAllTools = [] // fix ①
+    this.defaultSession.invalidateCapabilitiesCache()
+  }
+
+  /** 立即触发记忆提取（默认 session）。 */
   async extractMemoriesNow(): Promise<string[]> {
-    this.lastSavedMemoryPaths = []
-    if (this.history.length === 0) return []
-    await this.extractor.run(this.historySnapshot(), this.buildContext())
-    await this.extractor.drain(10_000)
-    return [...this.lastSavedMemoryPaths]
+    return this.defaultSession.extractMemoriesNow()
   }
 
-  /** 返回当前对话历史的快照副本。 */
+  /** 返回默认 session 的对话历史快照。 */
   historySnapshot(): Message[] {
-    return [...this.history]
+    return this.defaultSession.historySnapshot()
   }
 
-  /** 替换整个对话历史记录。 */
+  /** 替换默认 session 的对话历史。 */
   replaceHistory(messages: Message[]): void {
-    this.history.length = 0
-    this.history.push(...messages)
+    this.defaultSession.replaceHistory(messages)
   }
 
-  /** 等待所有后台任务完成并释放资源。 */
+  /** 中止默认 session 当前操作。 */
+  abort(): void {
+    this.defaultSession.abort()
+  }
+
+  /** 返回默认 session 的消息数量。 */
+  historyLength(): number {
+    return this.defaultSession.historyLength()
+  }
+
+  /** 返回当前已解析的工具名称列表（工具未解析时返回空数组）。 */
+  toolNames(): string[] {
+    return this.cachedAllTools.map(t => t.name)
+  }
+
+  /** 返回 Agent 级别的默认活跃技能 ID 列表。 */
+  activeSkillIds(): string[] {
+    return this.runtimeState?.activeSkills.map(s => s.id) ?? []
+  }
+
+  /**
+   * 等待默认 session 后台任务完成并释放所有 provider 资源。
+   *
+   * **调用后所有由本 Agent 创建的 session 均不可再使用。**
+   * session 通过闭包持有对本 Agent providers 的引用，drain 后继续调用
+   * 将对已关闭的连接发起工具解析，行为未定义。
+   */
   async drain(timeoutMs?: number): Promise<void> {
-    await this.extractor.drain(timeoutMs)
+    await this.defaultSession.drain(timeoutMs)
     await this.disposeProviders()
   }
 
-  // 释放所有工具提供商的资源
   private async disposeProviders(): Promise<void> {
     if (!this.runtimeState) return
+    // fix ①: 处置 providers 后清理工具缓存，释放引用、防止 toolNames() 返回僵尸数据
+    this.cachedAllTools = []
+    this.allToolsPromise = undefined
     for (const provider of this.runtimeState.providers) {
       if (!provider.dispose) continue
       try {
@@ -433,35 +410,12 @@ export class Agent {
       }
     }
   }
-
-  /** 返回当前对话历史的消息数量。 */
-  historyLength(): number {
-    return this.history.length
-  }
-
-  /** 返回当前可用于工具调用的工具名称列表。 */
-  toolNames(): string[] {
-    return this.tools.map(t => t.name)
-  }
-
-  /** 返回当前活跃技能的 ID 列表。 */
-  activeSkillIds(): string[] {
-    if (!this.runtimeState) return []
-    return this.runtimeState.activeSkills.map(s => s.id)
-  }
-
-  /** 中止当前所有正在运行的操作，并创建新的 AbortController 以备后续调用。 */
-  abort(): void {
-    this.currentAbortController.abort()
-    this.currentAbortController = new AbortController()
-  }
 }
 
-// 解析布尔类型的环境变量值
 function parseBooleanEnv(raw: string | undefined, fallback: boolean): boolean {
   if (!raw) return fallback
   const value = raw.trim().toLowerCase()
   if (['1', 'true', 'yes', 'y', 'on'].includes(value)) return true
-  if (['0', 'false', 'no', 'n', 'off'].includes(value)) return false
+  if (['0', 'false', 'no', 'n', 'off'].includes(value)) return fallback
   return fallback
 }
